@@ -1,0 +1,23 @@
+{
+  "name": "genesys-cloud-toolkit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local admin web app for Genesys Cloud API - canned responses, wrap-up codes, queues, users, skills, and a generic API explorer.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.0",
+    "@google/genai": "^1.0.0",
+    "connect-mongo": "^5.1.0",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "mongodb": "^6.21.0",
+    "openai": "^5.0.0",
+    "purecloud-flow-scripting-api-sdk-javascript": "^0.68.1"
+  }
+}

@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Genesys Cloud Toolkit</title>
+  <link rel="stylesheet" href="style.css" />
+  <script>
+    // Applied before first paint so an explicit saved preference never flashes the wrong
+    // theme. No stored preference just falls through to the CSS prefers-color-scheme rule.
+    (function () {
+      try {
+        var stored = localStorage.getItem('gct-theme');
+        if (stored === 'light' || stored === 'dark') document.documentElement.setAttribute('data-theme', stored);
+      } catch (e) {}
+      try {
+        // Same idea for layout: an explicit saved choice (mobile drawer nav vs. full desktop
+        // sidebar) applies immediately. With nothing saved, fall back to actual viewport width.
+        var storedLayout = localStorage.getItem('gct-layout');
+        var isMobile = storedLayout ? storedLayout === 'mobile' : window.matchMedia('(max-width: 760px)').matches;
+        document.documentElement.classList.toggle('is-mobile', isMobile);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <button id="layoutToggleBtn" class="layout-toggle-btn" title="Toggle mobile view" aria-label="Toggle mobile view">&#128241;</button>
+  <button id="themeToggleBtn" class="theme-toggle-btn" title="Toggle dark mode" aria-label="Toggle dark mode">&#127769;</button>
+  <div id="app">
+
+    <!-- ===== Login ===== -->
+    <section id="view-login" class="login-wrap">
+      <div class="login-card">
+        <div class="login-brand">
+          <div>
+            <div class="logo">G</div>
+            <h1>Genesys Cloud Toolkit</h1>
+            <p>Connect once with an OAuth client, then manage responses, wrap-up codes, queues, users and skills in one place.</p>
+          </div>
+          <div class="hint-block">Need credentials?<br>Genesys Admin &rarr; Integrations &rarr; OAuth &rarr; <b style="opacity:.9">Client Credentials</b></div>
+        </div>
+
+        <div id="connectingView" class="connecting-wrap hidden">
+          <div class="connecting-head">
+            <div class="spinner"></div>
+            <div>
+              <div class="connecting-title">Connecting to <span id="connectingRegionLabel"></span>&hellip;</div>
+              <div class="connecting-sub">This usually takes a couple of seconds.</div>
+            </div>
+          </div>
+          <div id="connectSteps" class="connect-steps"></div>
+          <div class="connecting-tip">Tip: your access token is cached for the session, so most actions are instant.</div>
+        </div>
+
+        <form id="loginForm" class="login-form">
+          <h2>Connect your org</h2>
+          <div>
+            <div class="field-label">Region</div>
+            <select id="region" class="text-input" required></select>
+          </div>
+          <div>
+            <div class="field-label">Client ID</div>
+            <input type="text" id="clientId" class="text-input" placeholder="e.g. a1b2c3d4-&hellip;" autocomplete="off" required />
+          </div>
+          <div>
+            <div class="field-label">Client Secret</div>
+            <div class="secret-wrap">
+              <input type="password" id="clientSecret" class="text-input" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="off" required />
+              <span id="secretToggle" class="secret-toggle">Show</span>
+            </div>
+          </div>
+          <div class="notice-box">Your secret is sent once to your local server to fetch a token &mdash; it is never stored in the browser.</div>
+          <p id="loginError" class="field-error hidden"></p>
+          <div style="margin-top:auto">
+            <button type="submit" class="btn btn-accent btn-block">Connect</button>
+            <div class="login-footnote">Credentials stay on your machine</div>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ===== Authenticated shell ===== -->
+    <section id="view-shell" class="shell hidden">
+      <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+      <nav class="sidebar" id="sidebarNav">
+        <div class="sidebar-brand"><div class="logo">G</div><span>Cloud Toolkit</span></div>
+        <div class="status-pill">
+          <span class="status-dot"></span>
+          <div style="min-width:0">
+            <div class="title">Connected</div>
+            <div class="sub" id="statusRegionLabel"></div>
+          </div>
+        </div>
+        <div class="nav-scroll">
+          <div class="nav-group-title">Content</div>
+          <div class="nav-item" data-tab="canned">Canned Responses</div>
+          <div class="nav-item" data-tab="wrapup">Wrap-up Codes</div>
+          <div class="nav-group-title">Routing</div>
+          <div class="nav-item" data-tab="queues">Queues</div>
+          <div class="nav-item" data-tab="skills">Skills &amp; Routing</div>
+          <div class="nav-group-title">Directory</div>
+          <div class="nav-item" data-tab="users">Users &amp; Divisions</div>
+          <div class="nav-group-title">Automation</div>
+          <div class="nav-item" data-tab="architect">Architect</div>
+          <div class="nav-group-title">Compliance</div>
+          <div class="nav-item" data-tab="audit">Audit Log</div>
+          <div class="nav-group-title">Advanced</div>
+          <div class="nav-item" data-tab="explorer">API Explorer</div>
+        </div>
+        <div class="logout-item" id="logoutBtn">&#8617; Log out</div>
+      </nav>
+
+      <div class="main">
+        <div class="main-header">
+          <div style="display:flex;align-items:center;gap:12px;min-width:0">
+            <button id="hamburgerBtn" class="hamburger-btn" title="Open menu" aria-label="Open menu">&#9776;</button>
+            <div style="min-width:0">
+              <h2 id="mainTitle"></h2>
+              <div class="sub" id="mainSubtitle"></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button id="bulkAddBtn" class="btn btn-subtle hidden">Bulk add&hellip;</button>
+            <button id="createBtn" class="btn btn-accent hidden" style="padding:9px 15px;font-size:12.5px"></button>
+          </div>
+        </div>
+
+        <div class="main-body">
+
+          <!-- Canned Responses -->
+          <section id="tab-canned" class="tab-panel hidden">
+            <div class="toolbar-row">
+              <select id="cannedLibrarySelect" class="text-input" style="width:auto;padding:9px 12px;font-size:12.5px"></select>
+              <button id="cannedNewLibraryBtn" class="btn btn-subtle">+ New library</button>
+              <input type="search" id="cannedFilter" class="text-input filter-input" style="padding:9px 12px;font-size:12.5px" placeholder="&#128269;  Filter responses&hellip;" />
+            </div>
+            <div class="grid-table" style="grid-template-columns:1.1fr 2.2fr auto">
+              <div class="grid-head" style="grid-template-columns:1.1fr 2.2fr auto">Name<span>Response text</span><span></span></div>
+              <div id="cannedTableBody"></div>
+              <p id="cannedEmpty" class="empty-note hidden">No responses match.</p>
+            </div>
+            <p id="cannedError" class="field-error hidden" style="margin-top:10px"></p>
+            <button id="cannedLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+          </section>
+
+          <!-- Wrap-up Codes -->
+          <section id="tab-wrapup" class="tab-panel hidden">
+            <input type="search" id="wrapupFilter" class="text-input" style="max-width:320px;padding:9px 12px;font-size:12.5px;margin-bottom:18px" placeholder="&#128269;  Filter by name&hellip;" />
+            <div class="grid-table" style="grid-template-columns:2fr 1.4fr auto">
+              <div class="grid-head" style="grid-template-columns:2fr 1.4fr auto">Name<span>Division</span><span></span></div>
+              <div id="wrapupTableBody"></div>
+              <p id="wrapupEmpty" class="empty-note hidden">No wrap-up codes yet.</p>
+            </div>
+            <p id="wrapupError" class="field-error hidden" style="margin-top:10px"></p>
+            <button id="wrapupLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+          </section>
+
+          <!-- Queues -->
+          <section id="tab-queues" class="tab-panel hidden">
+            <div class="queue-layout">
+              <div class="queue-master">
+                <div class="queue-master-search" style="display:flex;gap:6px">
+                  <input type="search" id="queuesFilter" style="flex:1" placeholder="&#128269;  Filter queues&hellip;" />
+                  <button id="queuesRefreshBtn" class="btn btn-subtle" title="Refresh queues" style="padding:8px 10px">&#8635;</button>
+                </div>
+                <div id="queuesTableBody" class="queue-list"></div>
+                <button id="queuesLoadMoreBtn" class="btn btn-outline hidden" style="margin:10px;width:calc(100% - 20px)">Load more</button>
+              </div>
+
+              <div class="queue-detail">
+                <div class="card card-pad">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                    <div>
+                      <div id="queueSelectionSummary" style="font-weight:600;font-size:16px">Select a queue</div>
+                      <div id="queueSelectionMeta" class="sub" style="font-size:12px;color:var(--text-faint);margin-top:2px"></div>
+                    </div>
+                    <button id="queuesDeleteSelectedBtn" class="btn btn-danger hidden" style="padding:8px 14px;font-size:12px;flex:none"></button>
+                  </div>
+                  <div id="queueSettingsGrid" class="settings-grid hidden" style="margin-top:14px"></div>
+                </div>
+
+                <div id="queueMultiHintWrapper" class="card card-pad hidden">
+                  <p id="queueMultiHint" class="multi-hint"></p>
+                </div>
+
+                <div id="queueMembersCard" class="card card-pad">
+                  <div class="detail-card-head">
+                    <div class="detail-card-title">Members</div>
+                    <button id="membersAddBtn" class="btn btn-subtle">+ Add users</button>
+                  </div>
+                  <div class="toolbar-row" style="margin-bottom:10px">
+                    <button id="membersLoadUsersBtn" class="btn btn-subtle">Load / refresh user directory</button>
+                    <span id="membersUserCount" class="sub" style="font-size:11.5px;color:var(--text-faint)"></span>
+                  </div>
+                  <div id="queueMembersChips" class="chip-row"></div>
+                  <p id="membersError" class="field-error hidden" style="margin-top:10px"></p>
+                </div>
+
+                <div id="queueWrapupCard" class="card card-pad">
+                  <div class="detail-card-head">
+                    <div class="detail-card-title">Wrap-up Codes</div>
+                    <button id="queueWrapupAddBtn" class="btn btn-subtle">+ Assign codes</button>
+                  </div>
+                  <div id="queueWrapupChips" class="chip-row"></div>
+                  <p id="queueWrapupError" class="field-error hidden" style="margin-top:10px"></p>
+                </div>
+
+                <div id="queueLibraryCard" class="card card-pad">
+                  <div class="detail-card-title" style="margin-bottom:12px">Canned Response Libraries</div>
+                  <div id="queueLibraryModeSegment" class="segmented"></div>
+                  <div id="queueLibraryChooseWrap" style="margin-top:12px" class="hidden">
+                    <button id="queueLibraryChooseBtn" class="btn btn-subtle">Choose libraries&hellip;</button>
+                    <div id="queueLibraryChips" class="chip-row" style="margin-top:10px"></div>
+                  </div>
+                  <p id="queueLibraryError" class="field-error hidden" style="margin-top:10px"></p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Users & Divisions -->
+          <section id="tab-users" class="tab-panel hidden">
+            <div class="toolbar-row">
+              <input type="search" id="usersFilter" class="text-input filter-input" style="padding:9px 12px;font-size:12.5px" placeholder="&#128269;  Filter users by name or email&hellip;" />
+              <select id="usersDivisionFilter" class="text-input" style="width:auto;padding:9px 12px;font-size:12.5px">
+                <option value="">All divisions</option>
+              </select>
+              <select id="usersStateFilter" class="text-input" style="width:auto;padding:9px 12px;font-size:12.5px">
+                <option value="">Any state</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+            <p id="usersTotal" class="users-total"></p>
+            <div class="grid-table" style="grid-template-columns:1.4fr 1.8fr 1.2fr .8fr;margin-bottom:12px">
+              <div class="grid-head" style="grid-template-columns:1.4fr 1.8fr 1.2fr .8fr">Name<span>Email</span><span>Title</span><span>State</span></div>
+              <div id="usersTableBody"></div>
+            </div>
+            <button id="usersLoadMoreBtn" class="btn btn-outline hidden" style="margin-bottom:22px">Load more</button>
+            <p id="usersError" class="field-error hidden" style="margin-bottom:14px"></p>
+            <div style="font-weight:600;font-size:14px;margin-bottom:10px">Divisions <span class="sub" style="font-weight:400;color:var(--text-faint)">(click to filter users)</span></div>
+            <div id="divisionsTableBody" class="tile-grid"></div>
+          </section>
+
+          <!-- Skills -->
+          <section id="tab-skills" class="tab-panel hidden">
+            <input type="search" id="skillsFilter" class="text-input" style="max-width:320px;padding:9px 12px;font-size:12.5px;margin-bottom:18px" placeholder="&#128269;  Filter by name&hellip;" />
+            <div id="skillsTableBody" class="tile-grid"></div>
+            <p id="skillsError" class="field-error hidden" style="margin-top:14px"></p>
+            <button id="skillsLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:14px">Load more</button>
+          </section>
+
+          <!-- Architect -->
+          <section id="tab-architect" class="tab-panel hidden">
+            <div class="architect-layout">
+
+              <div class="card card-pad">
+                <div class="detail-card-head">
+                  <div class="detail-card-title">Generate a flow</div>
+                </div>
+                <div class="notice-box" style="margin-bottom:14px">Pick a flow type, describe what it should do in plain text, and Claude will fill in a template. You'll review the extracted details before anything is deployed.</div>
+
+                <div class="field-label">Flow type</div>
+                <select id="architectFlowType" class="text-input" style="margin-bottom:14px"></select>
+
+                <div class="field-label">Describe the flow</div>
+                <textarea id="architectPrompt" class="text-input" rows="4" style="margin-bottom:14px" placeholder="e.g. An IVR that greets callers, then offers Sales (transfers to the Sales Queue) and Support (transfers to the Support Queue)."></textarea>
+
+                <button id="architectGenerateBtn" class="btn btn-accent">Generate</button>
+                <p id="architectGenerateError" class="field-error hidden" style="margin-top:10px"></p>
+
+                <div id="architectReview" class="hidden" style="margin-top:18px">
+                  <div class="field-label">Review &amp; edit before deploying</div>
+                  <textarea id="architectReviewJson" class="text-input" rows="10" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px"></textarea>
+                  <p id="architectReviewError" class="field-inline-error hidden" style="margin-top:6px"></p>
+                  <div style="display:flex;gap:10px;margin-top:12px">
+                    <button id="architectDeployBtn" class="btn btn-accent">Deploy flow</button>
+                    <button id="architectDiscardBtn" class="btn btn-outline">Discard</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card card-pad">
+                <div class="detail-card-head">
+                  <div class="detail-card-title">Flows</div>
+                  <button id="architectFlowsRefreshBtn" class="btn btn-subtle">&#8635; Refresh</button>
+                </div>
+                <input type="search" id="architectFlowsFilter" class="text-input" style="margin-bottom:10px;padding:9px 12px;font-size:12.5px" placeholder="&#128269;  Filter flows&hellip;" />
+                <div id="architectFlowsList" class="chip-list-block"></div>
+                <p id="architectFlowsEmpty" class="empty-note hidden">No flows yet.</p>
+                <p id="architectFlowsError" class="field-error hidden" style="margin-top:10px"></p>
+                <button id="architectFlowsLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+              </div>
+
+              <div class="card card-pad">
+                <div class="detail-card-head">
+                  <div class="detail-card-title">Prompts</div>
+                </div>
+                <div class="toolbar-row" style="margin-bottom:12px">
+                  <input type="text" id="architectPromptName" class="text-input" style="padding:9px 12px;font-size:12.5px" placeholder="New prompt name" />
+                  <input type="text" id="architectPromptDescription" class="text-input" style="padding:9px 12px;font-size:12.5px" placeholder="Description (optional)" />
+                  <button id="architectPromptAddBtn" class="btn btn-subtle">+ Add</button>
+                </div>
+                <div id="architectPromptsList" class="chip-list-block"></div>
+                <p id="architectPromptsEmpty" class="empty-note hidden">No prompts yet.</p>
+                <p id="architectPromptsError" class="field-error hidden" style="margin-top:10px"></p>
+                <button id="architectPromptsLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+              </div>
+
+              <div class="card card-pad">
+                <div class="detail-card-head">
+                  <div class="detail-card-title">AI API key</div>
+                </div>
+                <p class="sub" style="margin-bottom:12px">Used only to turn your flow description into structured parameters. Bring your own key from any supported provider &mdash; stored in your session only, never written to disk.</p>
+                <div id="architectKeyStatus" class="sub" style="margin-bottom:10px"></div>
+
+                <div class="field-label">Provider</div>
+                <select id="architectProviderSelect" class="text-input" style="margin-bottom:10px"></select>
+
+                <div class="secret-wrap" style="margin-bottom:10px">
+                  <input type="password" id="architectApiKeyInput" class="text-input" placeholder="API key&hellip;" autocomplete="off" />
+                  <span id="architectKeyToggle" class="secret-toggle">Show</span>
+                </div>
+
+                <div class="field-label">Model <span class="sub" style="font-weight:400">(optional override)</span></div>
+                <input type="text" id="architectModelInput" class="text-input" style="margin-bottom:10px" placeholder="Uses the provider's default if left blank" />
+
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                  <button id="architectKeySaveBtn" class="btn btn-accent">Save key</button>
+                  <button id="architectKeyTestBtn" class="btn btn-subtle">Test key</button>
+                  <button id="architectKeyClearBtn" class="btn btn-outline">Clear</button>
+                </div>
+                <p id="architectKeyError" class="field-error hidden" style="margin-top:10px"></p>
+              </div>
+
+            </div>
+          </section>
+
+          <!-- Audit Log -->
+          <section id="tab-audit" class="tab-panel hidden">
+            <div class="card card-pad" style="margin-bottom:18px">
+              <div class="notice-box" style="margin-bottom:14px">Queries your organisation's Genesys Cloud audit trail &mdash; who changed what, and when. Requires the <b>audits:audit:view</b> permission on your OAuth client.</div>
+              <div class="audit-filter-grid">
+                <div>
+                  <div class="field-label">From</div>
+                  <input type="datetime-local" id="auditFrom" class="text-input" />
+                </div>
+                <div>
+                  <div class="field-label">To</div>
+                  <input type="datetime-local" id="auditTo" class="text-input" />
+                </div>
+                <div>
+                  <div class="field-label">Service</div>
+                  <select id="auditServiceSelect" class="text-input">
+                    <option value="">Any service</option>
+                  </select>
+                </div>
+                <div>
+                  <div class="field-label">Action</div>
+                  <input type="text" id="auditActionFilter" class="text-input" placeholder="e.g. Create, Update, Delete" />
+                </div>
+                <div>
+                  <div class="field-label">Entity type</div>
+                  <input type="text" id="auditEntityTypeFilter" class="text-input" placeholder="e.g. Queue, User" />
+                </div>
+                <div>
+                  <div class="field-label">User ID</div>
+                  <input type="text" id="auditUserIdFilter" class="text-input" placeholder="Genesys Cloud user GUID" />
+                </div>
+              </div>
+              <button id="auditSearchBtn" class="btn btn-accent" style="margin-top:14px">Search</button>
+              <span id="auditSearchStatus" class="sub" style="margin-left:12px"></span>
+              <p id="auditError" class="field-error hidden" style="margin-top:10px"></p>
+            </div>
+
+            <div class="grid-table" style="grid-template-columns:1.1fr 1fr 1fr 1fr 1.3fr .8fr">
+              <div class="grid-head" style="grid-template-columns:1.1fr 1fr 1fr 1fr 1.3fr .8fr">Time<span>User</span><span>Service</span><span>Action</span><span>Entity</span><span>Status</span></div>
+              <div id="auditTableBody"></div>
+              <p id="auditEmpty" class="empty-note hidden">No audit events match &mdash; try widening the date range or clearing filters.</p>
+            </div>
+            <button id="auditLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+          </section>
+
+          <!-- API Explorer -->
+          <section id="tab-explorer" class="tab-panel hidden">
+            <div style="max-width:760px">
+              <div class="notice-box" style="margin-bottom:18px">Call any Genesys Cloud API v2 endpoint directly &mdash; handy for anything the tabs don't cover. Start from a preset below. POST/PUT/PATCH/DELETE calls ask for confirmation before sending.</div>
+              <div id="explorerPresets" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px"></div>
+              <div class="explorer-form-row">
+                <select id="explorerMethod" class="text-input" style="width:auto;font-size:13px">
+                  <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+                </select>
+                <input type="text" id="explorerPath" class="text-input path-input" placeholder="/api/v2/organizations/me" />
+                <span id="explorerStarBtn" class="explorer-star" title="Save as favorite">&#9733;</span>
+                <button id="explorerSendBtn" class="btn btn-accent" style="padding:11px 20px">Send</button>
+              </div>
+              <details style="margin-bottom:14px">
+                <summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">Query / body (optional JSON)</summary>
+                <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+                  <textarea id="explorerQuery" class="text-input" rows="2" placeholder='{"pageSize": 25}'></textarea>
+                  <textarea id="explorerBody" class="text-input" rows="5" placeholder='{"name": "example"}'></textarea>
+                </div>
+              </details>
+              <p id="explorerError" class="field-error hidden"></p>
+
+              <div id="explorerMeta" class="explorer-meta hidden"></div>
+
+              <div class="explorer-tabs">
+                <div class="explorer-tab active" data-explorer-tab="response">Response</div>
+                <div class="explorer-tab" data-explorer-tab="headers">Headers</div>
+                <div class="explorer-tab" data-explorer-tab="history">History</div>
+                <div class="explorer-tab" data-explorer-tab="favorites">Favorites</div>
+              </div>
+
+              <div id="explorerPanel-response">
+                <div class="explorer-console">
+                  <div id="explorerLoading" class="explorer-loading hidden"><span class="spinner"></span>Sending request&hellip;</div>
+                  <pre id="explorerResult">// Response will appear here</pre>
+                </div>
+              </div>
+              <div id="explorerPanel-headers" class="hidden">
+                <div id="explorerHeaders" class="explorer-headers">No response yet.</div>
+              </div>
+              <div id="explorerPanel-history" class="hidden">
+                <div id="explorerHistoryList"></div>
+                <p id="explorerHistoryEmpty" class="empty-note hidden">No calls yet &mdash; sent requests show up here.</p>
+              </div>
+              <div id="explorerPanel-favorites" class="hidden">
+                <div id="explorerFavList"></div>
+                <p id="explorerFavEmpty" class="empty-note hidden">No favorites yet &mdash; click the star next to a call to save it.</p>
+              </div>
+            </div>
+          </section>
+
+        </div>
+
+        <div id="toast" class="toast hidden"><span class="toast-mark">&#10003;</span><span id="toastMessage"></span></div>
+        <div id="undoToast" class="undo-toast hidden">
+          <span id="undoToastMessage"></span>
+          <button id="undoToastBtn" class="btn btn-subtle">Undo</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Confirm modal (delete etc.) ===== -->
+    <div id="confirmModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card" style="width:400px">
+        <div class="modal-head"><div class="title" id="confirmModalTitle"></div></div>
+        <div class="modal-body">
+          <p class="confirm-message" id="confirmModalMessage"></p>
+          <p class="usage-note warn hidden" id="confirmModalUsage"></p>
+        </div>
+        <div class="modal-foot">
+          <button id="confirmModalCancelBtn" class="btn btn-outline">Cancel</button>
+          <button id="confirmModalConfirmBtn" class="btn btn-danger">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== User drill-in modal ===== -->
+    <div id="userModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card wide">
+        <div class="modal-head">
+          <div class="title" id="userModalTitle"></div>
+          <div class="sub" id="userModalSubtitle"></div>
+        </div>
+        <div class="modal-body" id="userModalBody"></div>
+        <div class="modal-foot">
+          <button id="userModalCloseBtn" class="btn btn-outline">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Create / Bulk modal ===== -->
+    <div id="createModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-head"><div class="title" id="createModalTitle"></div></div>
+        <div class="modal-body">
+          <div id="createNameField">
+            <div class="field-label">Name</div>
+            <input type="text" id="createNameInput" class="text-input" />
+            <p id="createNameError" class="field-inline-error hidden"></p>
+          </div>
+          <div id="createTextField" class="hidden">
+            <div class="field-label">Response text</div>
+            <textarea id="createTextInput" class="text-input" rows="3" placeholder="What the agent sends&hellip;"></textarea>
+            <p id="createTextError" class="field-inline-error hidden"></p>
+          </div>
+          <div id="createDivisionField" class="hidden">
+            <div class="field-label">Division</div>
+            <select id="createDivisionInput" class="text-input"></select>
+          </div>
+          <div id="createBulkField" class="hidden">
+            <div class="field-label" id="createBulkLabel"></div>
+            <textarea id="createBulkInput" class="text-input" rows="7" style="font-family:ui-monospace,Menlo,Consolas,monospace"></textarea>
+          </div>
+          <div id="createBulkResults" class="bulk-results"></div>
+        </div>
+        <div class="modal-foot">
+          <button id="createModalCancelBtn" class="btn btn-outline">Cancel</button>
+          <button id="createModalSubmitBtn" class="btn btn-accent"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Pick modal (members / wrapup codes / libraries) ===== -->
+    <div id="pickModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card wide">
+        <div class="modal-head">
+          <div class="title" id="pickModalTitle"></div>
+          <div class="sub" id="pickModalSubtitle"></div>
+        </div>
+        <div class="modal-body pick">
+          <div id="pickModalFilterWrap" style="padding:8px 8px 0">
+            <input type="search" id="pickModalFilter" class="text-input" style="padding:8px 10px;font-size:12.5px" placeholder="Filter&hellip;" />
+          </div>
+          <div id="pickModalList" style="padding:8px"></div>
+          <p id="pickModalEmpty" class="empty-note hidden">Nothing left to add.</p>
+        </div>
+        <div class="modal-foot">
+          <span class="count" id="pickModalCount"></span>
+          <button id="pickModalCancelBtn" class="btn btn-outline">Cancel</button>
+          <button id="pickModalApplyBtn" class="btn btn-accent"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Command palette ===== -->
+    <div id="paletteOverlay" class="palette-overlay hidden">
+      <div class="palette-card">
+        <div class="palette-search">
+          <span style="opacity:.4">&#128269;</span>
+          <input type="text" id="paletteInput" placeholder="Search tools and actions&hellip;" />
+          <span class="palette-esc">ESC</span>
+        </div>
+        <div id="paletteList" class="palette-list"></div>
+        <p id="paletteEmpty" class="empty-note hidden">No matches.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

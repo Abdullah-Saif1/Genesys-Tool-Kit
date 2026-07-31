@@ -1,0 +1,7 @@
+node_modules/
+.app-password
+.session-secret
+.vercel
+
+.vercel
+.env*
