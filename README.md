@@ -95,3 +95,8 @@ session store (via `connect-mongo`), not as an app database. Nothing else is per
 
 Locally, none of these env vars are required — the app falls back to in-memory sessions and a
 `.app-password`/`.session-secret` file-cached secret, which is exactly what you want for `npm start`.
+
+### Auto-deploy
+
+This repo is connected to the Vercel project (`abdullah-saif/genesys-cloud-toolkit`). Pushing to
+`main` deploys to production automatically — no need to run `vercel --prod` by hand anymore.
