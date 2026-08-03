@@ -294,7 +294,26 @@ function showUndoableDelete({ itemName, remove, restore, commit, seconds = 5 }) 
 // ---- HTML sanitizer (allowlist-based) for the canned-response preview -----
 
 const SANITIZE_ALLOWED_TAGS = new Set(['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'SPAN', 'DIV', 'A', 'UL', 'OL', 'LI', 'SMALL', 'SUB', 'SUP']);
-const SANITIZE_ALLOWED_ATTRS = { A: ['href'] };
+const SANITIZE_ALLOWED_ATTRS = { A: ['href'], SPAN: ['style'], DIV: ['style'] };
+
+// Only these CSS properties survive sanitization — keeps the rich-text formatting (font family/size,
+// color, bold/italic/underline) that the canned-response editor produces, while blocking style-based
+// injection vectors like background: url(javascript:...) or CSS expression().
+const SANITIZE_ALLOWED_STYLE_PROPS = new Set(['color', 'font-family', 'font-size', 'font-weight', 'font-style', 'text-decoration']);
+
+function sanitizeStyleValue(styleText) {
+  const out = [];
+  styleText.split(';').forEach((decl) => {
+    const idx = decl.indexOf(':');
+    if (idx === -1) return;
+    const prop = decl.slice(0, idx).trim().toLowerCase();
+    const value = decl.slice(idx + 1).trim();
+    if (!value || !SANITIZE_ALLOWED_STYLE_PROPS.has(prop)) return;
+    if (/url\s*\(|expression\s*\(|javascript:/i.test(value)) return;
+    out.push(`${prop}: ${value}`);
+  });
+  return out.join('; ');
+}
 
 function sanitizeHtmlToFragment(html) {
   const template = document.createElement('template');
@@ -324,6 +343,11 @@ function sanitizeHtmlToFragment(html) {
       const value = node.getAttribute(attr);
       if (!value) return;
       if (attr === 'href' && !/^https?:\/\//i.test(value.trim())) return; // no javascript:/data: URLs
+      if (attr === 'style') {
+        const safeStyle = sanitizeStyleValue(value);
+        if (safeStyle) el.setAttribute('style', safeStyle);
+        return;
+      }
       el.setAttribute(attr, value);
       if (attr === 'href') {
         el.setAttribute('target', '_blank');
@@ -418,6 +442,7 @@ const tabLoaders = {
   users: loadUsersAndDivisions,
   skills: () => skillsResource.reset(),
   architect: loadArchitectTab,
+  schedules: () => schedulesResource.reset(),
   audit: loadAuditTab,
   explorer: () => {},
 };
@@ -429,6 +454,7 @@ const tabMeta = {
   users: { title: 'Users & Divisions', sub: 'Your organisation directory', create: null, bulk: false },
   skills: { title: 'Skills & Routing', sub: 'ACD skills used for skills-based routing', create: 'New skill', bulk: false },
   architect: { title: 'Architect', sub: 'Flows & prompts, and AI-assisted flow generation', create: null, bulk: false },
+  schedules: { title: 'Schedules', sub: 'Time periods used by schedule groups and Architect flows', create: 'New schedule', bulk: false },
   audit: { title: 'Audit Log', sub: 'Who changed what, and when', create: null, bulk: false },
   explorer: { title: 'API Explorer', sub: 'Direct access to any Genesys Cloud API v2 endpoint', create: null, bulk: false },
 };
@@ -445,7 +471,7 @@ function setActiveTab(tab) {
   createBtn.classList.toggle('hidden', !meta.create);
   if (meta.create) {
     createBtn.textContent = `+ ${meta.create}`;
-    createBtn.onclick = () => openCreateModal(tab === 'skills' ? 'skill' : tab === 'queues' ? 'queue' : tab);
+    createBtn.onclick = () => openCreateModal(tab === 'skills' ? 'skill' : tab === 'queues' ? 'queue' : tab === 'schedules' ? 'schedule' : tab);
   }
 
   const bulkBtn = document.getElementById('bulkAddBtn');
@@ -584,14 +610,15 @@ async function checkStatus() {
 function paletteActions() {
   const nav = [
     ['canned', 'Canned Responses'], ['wrapup', 'Wrap-up Codes'], ['queues', 'Queues'],
-    ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['explorer', 'API Explorer'],
+    ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['schedules', 'Schedules'], ['explorer', 'API Explorer'],
   ];
   const items = nav.map(([k, l]) => ({ label: `Go to ${l}`, tag: 'Navigate', icon: '→', iconBg: '#4b5b68', run: () => setActiveTab(k) }));
   items.unshift(
     { label: 'New canned response', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('canned'); openCreateModal('canned'); } },
     { label: 'New wrap-up code', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('wrapup'); openCreateModal('wrapup'); } },
     { label: 'New skill', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('skills'); openCreateModal('skill'); } },
-    { label: 'New queue', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('queues'); openCreateModal('queue'); } }
+    { label: 'New queue', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('queues'); openCreateModal('queue'); } },
+    { label: 'New schedule', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('schedules'); openCreateModal('schedule'); } }
   );
   items.push({ label: 'Log out', tag: 'Session', icon: '↩', iconBg: '#8a949c', run: () => document.getElementById('logoutBtn').click() });
   return items;
@@ -634,6 +661,146 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeOverlays();
 });
 
+// ---- Rich text toolbar (canned response editor) ----------------------------
+
+// The standard cross-platform "web-safe" font stack — each entry falls back through equivalents
+// available on Windows/macOS/Linux so a response still looks reasonable if the named face is
+// missing on whoever's viewing it. Shared by both the individual editor and the bulk toolbar so
+// the two font lists can't drift out of sync.
+const FONT_FAMILY_OPTIONS = [
+  ['Arial, Helvetica, sans-serif', 'Arial'],
+  ['"Arial Black", Gadget, sans-serif', 'Arial Black'],
+  ['"Arial Narrow", Arial, sans-serif', 'Arial Narrow'],
+  ['"Book Antiqua", "Palatino Linotype", Palatino, serif', 'Book Antiqua'],
+  ['Calibri, Candara, Segoe, "Segoe UI", Optima, sans-serif', 'Calibri'],
+  ['Cambria, Georgia, serif', 'Cambria'],
+  ['Candara, Calibri, Segoe, "Segoe UI", Optima, sans-serif', 'Candara'],
+  ['"Century Gothic", CenturyGothic, AppleGothic, sans-serif', 'Century Gothic'],
+  ['"Comic Sans MS", "Comic Sans", cursive', 'Comic Sans MS'],
+  ['Consolas, Monaco, monospace', 'Consolas'],
+  ['Constantia, Georgia, serif', 'Constantia'],
+  ['Corbel, "Lucida Grande", "Lucida Sans Unicode", sans-serif', 'Corbel'],
+  ['"Courier New", Courier, monospace', 'Courier New'],
+  ['"Franklin Gothic Medium", "Arial Narrow", Arial, sans-serif', 'Franklin Gothic Medium'],
+  ['Garamond, Baskerville, "Baskerville Old Face", "Hoefler Text", "Times New Roman", serif', 'Garamond'],
+  ['Georgia, "Times New Roman", Times, serif', 'Georgia'],
+  ['Helvetica, Arial, sans-serif', 'Helvetica'],
+  ['Impact, Charcoal, sans-serif', 'Impact'],
+  ['"Lucida Console", Monaco, monospace', 'Lucida Console'],
+  ['"Lucida Sans Unicode", "Lucida Grande", sans-serif', 'Lucida Sans Unicode'],
+  ['"Segoe UI", Frutiger, "Frutiger Linotype", "Dejavu Sans", sans-serif', 'Segoe UI'],
+  ['Tahoma, Geneva, sans-serif', 'Tahoma'],
+  ['"Times New Roman", Times, serif', 'Times New Roman'],
+  ['"Trebuchet MS", "Lucida Grande", "Lucida Sans Unicode", sans-serif', 'Trebuchet MS'],
+  ['Verdana, Geneva, sans-serif', 'Verdana'],
+];
+
+function populateFontFamilySelect(selectId) {
+  const select = document.getElementById(selectId);
+  FONT_FAMILY_OPTIONS.forEach(([stack, label]) => {
+    select.appendChild(el('option', { value: stack, text: label }));
+  });
+}
+populateFontFamilySelect('rtFontFamily');
+populateFontFamilySelect('bulkRtFontFamily');
+
+// document.execCommand is deprecated but remains the only zero-dependency way to drive a
+// contenteditable region — there's no build step / npm frontend deps in this app to pull in a
+// real editor library for what's otherwise a small set of formatting options.
+(function initRichTextToolbar() {
+  const editor = document.getElementById('createTextInput');
+  try {
+    document.execCommand('styleWithCSS', false, true); // makes bold/color/font produce inline style= instead of legacy <font>/<b>-only markup
+  } catch {
+    // Unsupported in some browsers — formatting still works, just via legacy tags.
+  }
+
+  function withPreservedSelection(handler) {
+    return (e) => {
+      e.preventDefault(); // keep the editor's text selection instead of losing it to the toolbar button
+      handler();
+    };
+  }
+
+  document.querySelectorAll('#richtextToolbar .rt-btn[data-cmd]').forEach((btn) => {
+    btn.addEventListener('mousedown', withPreservedSelection(() => {
+      editor.focus();
+      document.execCommand(btn.dataset.cmd);
+      syncToolbarState();
+    }));
+  });
+
+  document.getElementById('rtClear').addEventListener('mousedown', withPreservedSelection(() => {
+    editor.focus();
+    document.execCommand('removeFormat');
+    syncToolbarState();
+  }));
+
+  document.getElementById('rtFontFamily').addEventListener('change', (e) => {
+    const family = e.target.value;
+    editor.focus();
+    if (family) document.execCommand('fontName', false, family);
+    e.target.value = '';
+  });
+
+  document.getElementById('rtFontSize').addEventListener('change', (e) => {
+    const px = e.target.value;
+    if (px) applyFontSizePx(editor, px);
+    e.target.value = '';
+  });
+
+  document.getElementById('rtColor').addEventListener('input', (e) => {
+    editor.focus();
+    document.execCommand('foreColor', false, e.target.value);
+  });
+
+  // Paste as plain text only — accepting pasted HTML would let arbitrary markup/attributes into
+  // the editor, bypassing the toolbar as the only source of formatting.
+  editor.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    document.execCommand('insertText', false, text);
+  });
+
+  editor.addEventListener('keyup', syncToolbarState);
+  editor.addEventListener('mouseup', syncToolbarState);
+  editor.addEventListener('focus', syncToolbarState);
+})();
+
+// execCommand('fontSize') only accepts the legacy 1-7 scale, not pixel values — the standard
+// workaround is to apply a throwaway size (7), then swap the <font size="7"> it creates for a
+// span with the real pixel size.
+function applyFontSizePx(editor, px) {
+  editor.focus();
+  // styleWithCSS (enabled at init, for bold/color/font-name) makes Chrome's 'fontSize' command
+  // emit a keyword size (style="font-size: xxx-large") instead of the legacy <font size="7">
+  // this workaround depends on — switch it off just for this command, then restore it.
+  document.execCommand('styleWithCSS', false, false);
+  document.execCommand('fontSize', false, '7');
+  document.execCommand('styleWithCSS', false, true);
+  editor.querySelectorAll('font[size="7"]').forEach((f) => {
+    const span = document.createElement('span');
+    span.style.fontSize = `${px}px`;
+    while (f.firstChild) span.appendChild(f.firstChild);
+    f.replaceWith(span);
+    // Replacing the node invalidates the current Selection/Range — restore it over the new span
+    // so a formatting command applied right after (e.g. picking a color next) still has something
+    // to act on, instead of silently no-op'ing on a stale range.
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+}
+
+function syncToolbarState() {
+  ['bold', 'italic', 'underline'].forEach((cmd) => {
+    const btn = document.getElementById(`rt${cmd[0].toUpperCase()}${cmd.slice(1)}`);
+    if (btn) btn.classList.toggle('active', document.queryCommandState(cmd));
+  });
+}
+
 // ---- Create / Bulk modal ---------------------------------------------------
 
 const CREATE_CONFIG = {
@@ -642,6 +809,7 @@ const CREATE_CONFIG = {
   skill: { title: 'New skill', needsText: false, placeholder: 'e.g. Spanish', submitLabel: 'Add skill' },
   library: { title: 'New library', needsText: false, placeholder: 'e.g. Support', submitLabel: 'Add library' },
   queue: { title: 'New queue', needsText: false, placeholder: 'e.g. Tier 2 Support', submitLabel: 'Add queue' },
+  schedule: { title: 'New schedule', needsText: false, placeholder: 'e.g. Holiday Hours', submitLabel: 'Add schedule' },
 };
 const BULK_CONFIG = {
   canned: { title: 'Bulk add responses', label: 'One response per line, formatted as Name | Response text', placeholder: 'Greeting | Hello, thanks for reaching out!\nClosing | Is there anything else I can help with?', submitLabel: 'Bulk create' },
@@ -652,10 +820,10 @@ let activeCreateKind = null;
 let activeCreateMode = null; // 'single' | 'bulk'
 let activeEditItem = null; // set when editing an existing item; null when creating
 
-const EDIT_TITLES = { canned: 'canned response', wrapup: 'wrap-up code', skill: 'skill', queue: 'queue' };
+const EDIT_TITLES = { canned: 'canned response', wrapup: 'wrap-up code', skill: 'skill', queue: 'queue', schedule: 'schedule' };
 
 function clearInlineErrors() {
-  ['createNameError', 'createTextError'].forEach((id) => {
+  ['createNameError', 'createTextError', 'createScheduleStartError', 'createScheduleEndError'].forEach((id) => {
     const node = document.getElementById(id);
     node.textContent = '';
     node.classList.add('hidden');
@@ -669,7 +837,25 @@ function showInlineError(id, message) {
 }
 
 function resourceForKind(kind) {
-  return { canned: cannedResource, wrapup: wrapupResource, skill: skillsResource, queue: queuesResource }[kind];
+  return { canned: cannedResource, wrapup: wrapupResource, skill: skillsResource, queue: queuesResource, schedule: schedulesResource }[kind];
+}
+
+// Genesys schedules use a "local date-time" with no timezone, e.g. "2026-08-03T09:00:00.000" —
+// datetime-local inputs give "2026-08-03T09:00", so pad seconds/millis on the way out and trim
+// them on the way back in.
+function toGenesysLocalDateTime(value) {
+  if (!value) return value;
+  return value.length === 16 ? `${value}:00.000` : value;
+}
+
+function fromGenesysLocalDateTime(value) {
+  return value ? value.slice(0, 16) : '';
+}
+
+function formatScheduleDate(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  return isNaN(d) ? value : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function isDuplicateName(kind, name, excludeId) {
@@ -694,6 +880,13 @@ function populateDivisionSelect(selectedId) {
   });
 }
 
+function resetScheduleFields() {
+  document.getElementById('createScheduleStart').value = '';
+  document.getElementById('createScheduleEnd').value = '';
+  document.getElementById('createScheduleRrule').value = '';
+  document.getElementById('createScheduleDescription').value = '';
+}
+
 async function openCreateModal(kind) {
   const cfg = CREATE_CONFIG[kind];
   if (!cfg) return;
@@ -704,16 +897,18 @@ async function openCreateModal(kind) {
   document.getElementById('createModalTitle').textContent = cfg.title;
   document.getElementById('createNameField').classList.remove('hidden');
   document.getElementById('createTextField').classList.toggle('hidden', !cfg.needsText);
-  document.getElementById('createDivisionField').classList.toggle('hidden', kind !== 'wrapup');
+  document.getElementById('createDivisionField').classList.toggle('hidden', kind !== 'wrapup' && kind !== 'schedule');
+  document.getElementById('createScheduleFields').classList.toggle('hidden', kind !== 'schedule');
   document.getElementById('createBulkField').classList.add('hidden');
   document.getElementById('createNameInput').value = '';
   document.getElementById('createNameInput').placeholder = cfg.placeholder;
-  document.getElementById('createTextInput').value = '';
+  document.getElementById('createTextInput').innerHTML = '';
+  resetScheduleFields();
   document.getElementById('createBulkResults').innerHTML = '';
   document.getElementById('createModalSubmitBtn').textContent = cfg.submitLabel;
   document.getElementById('createModalOverlay').classList.remove('hidden');
   document.getElementById('createNameInput').focus();
-  if (kind === 'wrapup') {
+  if (kind === 'wrapup' || kind === 'schedule') {
     await ensureDivisionsCache();
     populateDivisionSelect('');
   }
@@ -729,22 +924,37 @@ async function openEditModal(kind, item) {
   document.getElementById('createModalTitle').textContent = `Edit ${EDIT_TITLES[kind] || kind}`;
   document.getElementById('createNameField').classList.remove('hidden');
   document.getElementById('createTextField').classList.toggle('hidden', !cfg.needsText);
-  document.getElementById('createDivisionField').classList.toggle('hidden', kind !== 'wrapup');
+  document.getElementById('createDivisionField').classList.toggle('hidden', kind !== 'wrapup' && kind !== 'schedule');
+  document.getElementById('createScheduleFields').classList.toggle('hidden', kind !== 'schedule');
   document.getElementById('createBulkField').classList.add('hidden');
   document.getElementById('createNameInput').value = item.name || '';
   document.getElementById('createNameInput').placeholder = cfg.placeholder;
   if (cfg.needsText) {
-    document.getElementById('createTextInput').value = (item.texts && item.texts[0] && item.texts[0].content) || '';
+    document.getElementById('createTextInput').innerHTML = (item.texts && item.texts[0] && item.texts[0].content) || '';
+  }
+  resetScheduleFields();
+  if (kind === 'schedule') {
+    document.getElementById('createScheduleStart').value = fromGenesysLocalDateTime(item.start);
+    document.getElementById('createScheduleEnd').value = fromGenesysLocalDateTime(item.end);
+    document.getElementById('createScheduleRrule').value = item.rrule || '';
+    document.getElementById('createScheduleDescription').value = item.description || '';
   }
   document.getElementById('createBulkResults').innerHTML = '';
   document.getElementById('createModalSubmitBtn').textContent = 'Save changes';
   document.getElementById('createModalOverlay').classList.remove('hidden');
   document.getElementById('createNameInput').focus();
-  if (kind === 'wrapup') {
+  if (kind === 'wrapup' || kind === 'schedule') {
     await ensureDivisionsCache();
     const currentDivisionId = item.division && item.division.id !== '*' ? item.division.id : '';
     populateDivisionSelect(currentDivisionId);
   }
+}
+
+function resetBulkRichToolbar() {
+  document.getElementById('bulkRtFontFamily').value = '';
+  document.getElementById('bulkRtFontSize').value = '';
+  document.getElementById('bulkRtColor').value = '#152935';
+  ['bulkRtBold', 'bulkRtItalic', 'bulkRtUnderline'].forEach((id) => document.getElementById(id).classList.remove('active'));
 }
 
 function openBulkModal(kind) {
@@ -759,11 +969,50 @@ function openBulkModal(kind) {
   document.getElementById('createDivisionField').classList.add('hidden');
   document.getElementById('createBulkField').classList.remove('hidden');
   document.getElementById('createBulkLabel').textContent = cfg.label;
+  document.getElementById('createBulkRichToolbar').classList.toggle('hidden', kind !== 'canned');
+  resetBulkRichToolbar();
   document.getElementById('createBulkInput').value = '';
   document.getElementById('createBulkInput').placeholder = cfg.placeholder;
   document.getElementById('createBulkResults').innerHTML = '';
   document.getElementById('createModalSubmitBtn').textContent = cfg.submitLabel;
   document.getElementById('createModalOverlay').classList.remove('hidden');
+}
+
+// Bold/italic/underline in the bulk toolbar are simple on/off toggles (not execCommand) — the
+// chosen formatting is applied uniformly to every line's text when the batch is submitted, since
+// there's no per-character selection to format in a bulk textarea.
+document.querySelectorAll('#createBulkRichToolbar .rt-btn').forEach((btn) => {
+  btn.addEventListener('click', () => btn.classList.toggle('active'));
+});
+
+function currentBulkFormat() {
+  return {
+    fontFamily: document.getElementById('bulkRtFontFamily').value,
+    fontSize: document.getElementById('bulkRtFontSize').value,
+    color: document.getElementById('bulkRtColor').value,
+    bold: document.getElementById('bulkRtBold').classList.contains('active'),
+    italic: document.getElementById('bulkRtItalic').classList.contains('active'),
+    underline: document.getElementById('bulkRtUnderline').classList.contains('active'),
+  };
+}
+
+function escapeHtml(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Applies the bulk toolbar's chosen formatting to one line of plain text, producing the same kind
+// of markup the individual rich-text editor would (span with inline style, wrapped in b/i/u).
+function applyBulkFormat(plainText, fmt) {
+  let html = escapeHtml(plainText);
+  if (fmt.bold) html = `<b>${html}</b>`;
+  if (fmt.italic) html = `<i>${html}</i>`;
+  if (fmt.underline) html = `<u>${html}</u>`;
+  const styleParts = [];
+  if (fmt.fontFamily) styleParts.push(`font-family: ${fmt.fontFamily}`);
+  if (fmt.fontSize) styleParts.push(`font-size: ${fmt.fontSize}px`);
+  if (fmt.color) styleParts.push(`color: ${fmt.color}`);
+  if (styleParts.length) html = `<span style="${styleParts.join('; ')}">${html}</span>`;
+  return html;
 }
 
 document.getElementById('createModalCancelBtn').addEventListener('click', closeOverlays);
@@ -775,8 +1024,15 @@ document.getElementById('createModalSubmitBtn').addEventListener('click', async 
     clearInlineErrors();
     const name = document.getElementById('createNameInput').value.trim();
     const cfg = CREATE_CONFIG[activeCreateKind];
-    const text = document.getElementById('createTextInput').value.trim();
+    const textEditor = document.getElementById('createTextInput');
+    const text = textEditor.innerHTML.trim(); // saved as-is (HTML) — textContent below is only for the "is it empty" check
     const divisionId = document.getElementById('createDivisionInput').value;
+    const scheduleExtra = activeCreateKind === 'schedule' ? {
+      start: document.getElementById('createScheduleStart').value,
+      end: document.getElementById('createScheduleEnd').value,
+      rrule: document.getElementById('createScheduleRrule').value.trim(),
+      description: document.getElementById('createScheduleDescription').value.trim(),
+    } : null;
 
     let hasError = false;
     if (!name) {
@@ -786,19 +1042,32 @@ document.getElementById('createModalSubmitBtn').addEventListener('click', async 
       showInlineError('createNameError', `An item named "${name}" already exists.`);
       hasError = true;
     }
-    if (cfg && cfg.needsText && !text) {
+    if (cfg && cfg.needsText && !textEditor.textContent.trim()) {
       showInlineError('createTextError', 'Response text cannot be empty.');
       hasError = true;
+    }
+    if (scheduleExtra) {
+      if (!scheduleExtra.start) {
+        showInlineError('createScheduleStartError', 'Start is required.');
+        hasError = true;
+      }
+      if (!scheduleExtra.end) {
+        showInlineError('createScheduleEndError', 'End is required.');
+        hasError = true;
+      } else if (scheduleExtra.start && scheduleExtra.end <= scheduleExtra.start) {
+        showInlineError('createScheduleEndError', 'End must be after start.');
+        hasError = true;
+      }
     }
     if (hasError) return;
 
     await withBusy(btn, activeEditItem ? 'Saving…' : 'Adding…', async () => {
       try {
         if (activeEditItem) {
-          await submitSingleEdit(activeCreateKind, activeEditItem, name, text, divisionId);
+          await submitSingleEdit(activeCreateKind, activeEditItem, name, text, divisionId, scheduleExtra);
           showToast(`Saved "${name}".`);
         } else {
-          await submitSingleCreate(activeCreateKind, name, text, divisionId);
+          await submitSingleCreate(activeCreateKind, name, text, divisionId, scheduleExtra);
           showToast(`Created "${name}"`);
         }
         closeOverlays();
@@ -817,12 +1086,12 @@ document.getElementById('createModalSubmitBtn').addEventListener('click', async 
   }
 });
 
-async function submitSingleCreate(kind, name, text, divisionId) {
+async function submitSingleCreate(kind, name, text, divisionId, scheduleExtra) {
   if (kind === 'canned') {
     const libraryId = document.getElementById('cannedLibrarySelect').value;
     if (!libraryId) throw new Error('Create or select a library first.');
     const created = await proxy('POST', '/api/v2/responsemanagement/responses', {
-      body: { name, libraries: [{ id: libraryId }], texts: [{ content: text, contentType: 'text/plain' }] },
+      body: { name, libraries: [{ id: libraryId }], texts: [{ content: text, contentType: 'text/html' }] },
     });
     cannedResource.prepend(created);
   } else if (kind === 'wrapup') {
@@ -843,6 +1112,17 @@ async function submitSingleCreate(kind, name, text, divisionId) {
   } else if (kind === 'queue') {
     const created = await proxy('POST', '/api/v2/routing/queues', { body: { name } });
     queuesResource.prepend(created);
+  } else if (kind === 'schedule') {
+    const body = {
+      name,
+      start: toGenesysLocalDateTime(scheduleExtra.start),
+      end: toGenesysLocalDateTime(scheduleExtra.end),
+    };
+    if (scheduleExtra.rrule) body.rrule = scheduleExtra.rrule;
+    if (scheduleExtra.description) body.description = scheduleExtra.description;
+    if (divisionId) body.division = { id: divisionId };
+    const created = await proxy('POST', '/api/v2/architect/schedules', { body });
+    schedulesResource.prepend(created);
   }
 }
 
@@ -851,15 +1131,17 @@ async function submitBulkCreate(kind, lines) {
   if (kind === 'canned') {
     const libraryId = document.getElementById('cannedLibrarySelect').value;
     if (!libraryId) { showToast('Create or select a library first.', true); return []; }
+    const fmt = currentBulkFormat();
     for (const line of lines) {
       const sep = line.indexOf('|');
       if (sep === -1) { results.push({ label: line, ok: false, message: 'expected "Name | Response text"' }); continue; }
       const name = line.slice(0, sep).trim();
-      const content = line.slice(sep + 1).trim();
-      if (!name || !content) { results.push({ label: line, ok: false, message: 'name and text are both required' }); continue; }
+      const plainText = line.slice(sep + 1).trim();
+      if (!name || !plainText) { results.push({ label: line, ok: false, message: 'name and text are both required' }); continue; }
       try {
+        const content = applyBulkFormat(plainText, fmt);
         const created = await proxy('POST', '/api/v2/responsemanagement/responses', {
-          body: { name, libraries: [{ id: libraryId }], texts: [{ content, contentType: 'text/plain' }] },
+          body: { name, libraries: [{ id: libraryId }], texts: [{ content, contentType: 'text/html' }] },
         });
         cannedResource.prepend(created);
         results.push({ label: name, ok: true });
@@ -882,11 +1164,11 @@ async function submitBulkCreate(kind, lines) {
   return results;
 }
 
-async function submitSingleEdit(kind, item, name, text, divisionId) {
+async function submitSingleEdit(kind, item, name, text, divisionId, scheduleExtra) {
   if (kind === 'canned') {
     const libraries = (item.libraries || []).map((l) => ({ id: l.id }));
     const updated = await proxy('PUT', `/api/v2/responsemanagement/responses/${item.id}`, {
-      body: { name, libraries, texts: [{ content: text, contentType: 'text/plain' }] },
+      body: { name, libraries, texts: [{ content: text, contentType: 'text/html' }] },
     });
     cannedResource.remove(item.id);
     cannedResource.prepend(updated);
@@ -904,6 +1186,18 @@ async function submitSingleEdit(kind, item, name, text, divisionId) {
     const updated = await proxy('PATCH', `/api/v2/routing/queues/${item.id}`, { body: { name } });
     queuesResource.remove(item.id);
     queuesResource.prepend(updated);
+  } else if (kind === 'schedule') {
+    const body = {
+      name,
+      start: toGenesysLocalDateTime(scheduleExtra.start),
+      end: toGenesysLocalDateTime(scheduleExtra.end),
+    };
+    if (scheduleExtra.rrule) body.rrule = scheduleExtra.rrule;
+    if (scheduleExtra.description) body.description = scheduleExtra.description;
+    if (divisionId) body.division = { id: divisionId };
+    const updated = await proxy('PUT', `/api/v2/architect/schedules/${item.id}`, { body });
+    schedulesResource.remove(item.id);
+    schedulesResource.prepend(updated);
   }
 }
 
@@ -1122,6 +1416,49 @@ async function loadAllDivisionsCache() {
   const data = await proxy('GET', '/api/v2/authorization/divisions', { query: { pageSize: 100 } });
   allDivisionsCache = data.entities || [];
 }
+
+// ---- Schedules ----------------------------------------------------
+
+const schedulesResource = createListResource({
+  path: '/api/v2/architect/schedules',
+  pageSize: 50,
+  containerId: 'schedulesTableBody',
+  filterId: 'schedulesFilter',
+  loadMoreId: 'schedulesLoadMoreBtn',
+  emptyId: 'schedulesEmpty',
+  errorId: 'schedulesError',
+  buildRow: (schedule) => {
+    const divisionName = schedule.division && schedule.division.id === '*' ? 'All divisions' : (schedule.division && schedule.division.name) || '—';
+    const period = `${formatScheduleDate(schedule.start)} → ${formatScheduleDate(schedule.end)}`;
+    const recurrence = schedule.rrule || 'One-time';
+
+    const editBtn = el('span', { class: 'row-edit', text: 'Edit' });
+    editBtn.addEventListener('click', () => openEditModal('schedule', schedule));
+
+    const del = el('span', { class: 'row-delete', text: 'Delete' });
+    del.addEventListener('click', async () => {
+      const ok = await confirmModal({
+        title: 'Delete schedule',
+        message: `Delete "${schedule.name}"? You'll have a few seconds to undo before it's actually removed.`,
+      });
+      if (!ok) return;
+      showUndoableDelete({
+        itemName: schedule.name,
+        remove: () => schedulesResource.remove(schedule.id),
+        restore: () => schedulesResource.prepend(schedule),
+        commit: () => proxy('DELETE', `/api/v2/architect/schedules/${schedule.id}`),
+      });
+    });
+
+    return gridRow('1.3fr 1.6fr 1.1fr 1fr auto', [
+      cellText(schedule.name, 'name'),
+      cellText(period, 'muted'),
+      el('span', { class: 'muted', text: recurrence, title: schedule.rrule || '' }),
+      cellText(divisionName, 'muted'),
+      el('div', { class: 'row-actions' }, [editBtn, del]),
+    ]);
+  },
+});
 
 // ---- Queues ----------------------------------------------------
 

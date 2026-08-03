@@ -35,7 +35,7 @@
           <div>
             <div class="logo">G</div>
             <h1>Genesys Cloud Toolkit</h1>
-            <p>Connect once with an OAuth client, then manage responses, wrap-up codes, queues, users and skills in one place.</p>
+            <p>Connect once with an OAuth client, then manage responses, wrap-up codes, queues, users, skills and schedules in one place.</p>
           </div>
           <div class="hint-block">Need credentials?<br>Genesys Admin &rarr; Integrations &rarr; OAuth &rarr; <b style="opacity:.9">Client Credentials</b></div>
         </div>
@@ -102,6 +102,7 @@
           <div class="nav-item" data-tab="users">Users &amp; Divisions</div>
           <div class="nav-group-title">Automation</div>
           <div class="nav-item" data-tab="architect">Architect</div>
+          <div class="nav-item" data-tab="schedules">Schedules</div>
           <div class="nav-group-title">Compliance</div>
           <div class="nav-item" data-tab="audit">Audit Log</div>
           <div class="nav-group-title">Advanced</div>
@@ -336,6 +337,18 @@
             </div>
           </section>
 
+          <!-- Schedules -->
+          <section id="tab-schedules" class="tab-panel hidden">
+            <input type="search" id="schedulesFilter" class="text-input" style="max-width:320px;padding:9px 12px;font-size:12.5px;margin-bottom:18px" placeholder="&#128269;  Filter by name&hellip;" />
+            <div class="grid-table" style="grid-template-columns:1.3fr 1.6fr 1.1fr 1fr auto">
+              <div class="grid-head" style="grid-template-columns:1.3fr 1.6fr 1.1fr 1fr auto">Name<span>Active period</span><span>Recurrence</span><span>Division</span><span></span></div>
+              <div id="schedulesTableBody"></div>
+              <p id="schedulesEmpty" class="empty-note hidden">No schedules yet.</p>
+            </div>
+            <p id="schedulesError" class="field-error hidden" style="margin-top:10px"></p>
+            <button id="schedulesLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+          </section>
+
           <!-- Audit Log -->
           <section id="tab-audit" class="tab-panel hidden">
             <div class="card card-pad" style="margin-bottom:18px">
@@ -483,15 +496,77 @@
           </div>
           <div id="createTextField" class="hidden">
             <div class="field-label">Response text</div>
-            <textarea id="createTextInput" class="text-input" rows="3" placeholder="What the agent sends&hellip;"></textarea>
+            <div class="richtext-toolbar" id="richtextToolbar">
+              <select id="rtFontFamily" class="rt-select" title="Font family">
+                <option value="">Font&hellip;</option>
+              </select>
+              <select id="rtFontSize" class="rt-select" title="Font size">
+                <option value="">Size&hellip;</option>
+                <option value="11">11</option>
+                <option value="12">12</option>
+                <option value="14">14</option>
+                <option value="16">16</option>
+                <option value="18">18</option>
+                <option value="24">24</option>
+                <option value="32">32</option>
+              </select>
+              <span class="rt-sep"></span>
+              <button type="button" id="rtBold" class="rt-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+              <button type="button" id="rtItalic" class="rt-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+              <button type="button" id="rtUnderline" class="rt-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+              <span class="rt-sep"></span>
+              <label class="rt-color-wrap" title="Text color">
+                <input type="color" id="rtColor" value="#152935" />
+              </label>
+              <button type="button" id="rtClear" class="rt-btn rt-clear" title="Clear formatting">Clear</button>
+            </div>
+            <div id="createTextInput" class="text-input richtext-editor" contenteditable="true" data-placeholder="What the agent sends&hellip;"></div>
             <p id="createTextError" class="field-inline-error hidden"></p>
           </div>
           <div id="createDivisionField" class="hidden">
             <div class="field-label">Division</div>
             <select id="createDivisionInput" class="text-input"></select>
           </div>
+          <div id="createScheduleFields" class="hidden">
+            <div class="field-label">Start</div>
+            <input type="datetime-local" id="createScheduleStart" class="text-input" />
+            <p id="createScheduleStartError" class="field-inline-error hidden"></p>
+
+            <div class="field-label" style="margin-top:12px">End</div>
+            <input type="datetime-local" id="createScheduleEnd" class="text-input" />
+            <p id="createScheduleEndError" class="field-inline-error hidden"></p>
+
+            <div class="field-label" style="margin-top:12px">Recurrence rule <span class="sub" style="font-weight:400">(optional iCal RRULE)</span></div>
+            <input type="text" id="createScheduleRrule" class="text-input" placeholder="e.g. FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" />
+
+            <div class="field-label" style="margin-top:12px">Description <span class="sub" style="font-weight:400">(optional)</span></div>
+            <textarea id="createScheduleDescription" class="text-input" rows="2"></textarea>
+          </div>
           <div id="createBulkField" class="hidden">
             <div class="field-label" id="createBulkLabel"></div>
+            <div class="richtext-toolbar hidden" id="createBulkRichToolbar">
+              <select id="bulkRtFontFamily" class="rt-select" title="Font family for every response in this batch">
+                <option value="">Font&hellip;</option>
+              </select>
+              <select id="bulkRtFontSize" class="rt-select" title="Font size for every response in this batch">
+                <option value="">Size&hellip;</option>
+                <option value="11">11</option>
+                <option value="12">12</option>
+                <option value="14">14</option>
+                <option value="16">16</option>
+                <option value="18">18</option>
+                <option value="24">24</option>
+                <option value="32">32</option>
+              </select>
+              <span class="rt-sep"></span>
+              <button type="button" id="bulkRtBold" class="rt-btn" title="Bold"><b>B</b></button>
+              <button type="button" id="bulkRtItalic" class="rt-btn" title="Italic"><i>I</i></button>
+              <button type="button" id="bulkRtUnderline" class="rt-btn" title="Underline"><u>U</u></button>
+              <span class="rt-sep"></span>
+              <label class="rt-color-wrap" title="Text color for every response in this batch">
+                <input type="color" id="bulkRtColor" value="#152935" />
+              </label>
+            </div>
             <textarea id="createBulkInput" class="text-input" rows="7" style="font-family:ui-monospace,Menlo,Consolas,monospace"></textarea>
           </div>
           <div id="createBulkResults" class="bulk-results"></div>
