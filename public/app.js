@@ -618,7 +618,8 @@ function paletteActions() {
     { label: 'New wrap-up code', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('wrapup'); openCreateModal('wrapup'); } },
     { label: 'New skill', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('skills'); openCreateModal('skill'); } },
     { label: 'New queue', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('queues'); openCreateModal('queue'); } },
-    { label: 'New schedule', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('schedules'); openCreateModal('schedule'); } }
+    { label: 'New schedule', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('schedules'); openCreateModal('schedule'); } },
+    { label: 'New division', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('users'); openCreateModal('division'); } }
   );
   items.push({ label: 'Log out', tag: 'Session', icon: '↩', iconBg: '#8a949c', run: () => document.getElementById('logoutBtn').click() });
   return items;
@@ -651,6 +652,7 @@ function closeOverlays() {
   document.getElementById('createModalOverlay').classList.add('hidden');
   document.getElementById('pickModalOverlay').classList.add('hidden');
   document.getElementById('userModalOverlay').classList.add('hidden');
+  document.getElementById('promptModalOverlay').classList.add('hidden');
 }
 
 document.getElementById('paletteInput').addEventListener('input', renderPalette);
@@ -810,6 +812,7 @@ const CREATE_CONFIG = {
   library: { title: 'New library', needsText: false, placeholder: 'e.g. Support', submitLabel: 'Add library' },
   queue: { title: 'New queue', needsText: false, placeholder: 'e.g. Tier 2 Support', submitLabel: 'Add queue' },
   schedule: { title: 'New schedule', needsText: false, placeholder: 'e.g. Holiday Hours', submitLabel: 'Add schedule' },
+  division: { title: 'New division', needsText: false, placeholder: 'e.g. West Region', submitLabel: 'Add division' },
 };
 const BULK_CONFIG = {
   canned: { title: 'Bulk add responses', label: 'One response per line, formatted as Name | Response text', placeholder: 'Greeting | Hello, thanks for reaching out!\nClosing | Is there anything else I can help with?', submitLabel: 'Bulk create' },
@@ -820,7 +823,7 @@ let activeCreateKind = null;
 let activeCreateMode = null; // 'single' | 'bulk'
 let activeEditItem = null; // set when editing an existing item; null when creating
 
-const EDIT_TITLES = { canned: 'canned response', wrapup: 'wrap-up code', skill: 'skill', queue: 'queue', schedule: 'schedule' };
+const EDIT_TITLES = { canned: 'canned response', wrapup: 'wrap-up code', skill: 'skill', queue: 'queue', schedule: 'schedule', division: 'division' };
 
 function clearInlineErrors() {
   ['createNameError', 'createTextError', 'createScheduleStartError', 'createScheduleEndError'].forEach((id) => {
@@ -859,9 +862,12 @@ function formatScheduleDate(value) {
 }
 
 function isDuplicateName(kind, name, excludeId) {
+  const target = name.trim().toLowerCase();
+  if (kind === 'division') {
+    return divisionsCacheForUsers.some((d) => d.id !== excludeId && (d.name || '').trim().toLowerCase() === target);
+  }
   const resource = resourceForKind(kind);
   if (!resource) return false;
-  const target = name.trim().toLowerCase();
   return resource.state.items.some((item) => item.id !== excludeId && (item.name || '').trim().toLowerCase() === target);
 }
 
@@ -899,10 +905,12 @@ async function openCreateModal(kind) {
   document.getElementById('createTextField').classList.toggle('hidden', !cfg.needsText);
   document.getElementById('createDivisionField').classList.toggle('hidden', kind !== 'wrapup' && kind !== 'schedule');
   document.getElementById('createScheduleFields').classList.toggle('hidden', kind !== 'schedule');
+  document.getElementById('createDivisionDescField').classList.toggle('hidden', kind !== 'division');
   document.getElementById('createBulkField').classList.add('hidden');
   document.getElementById('createNameInput').value = '';
   document.getElementById('createNameInput').placeholder = cfg.placeholder;
   document.getElementById('createTextInput').innerHTML = '';
+  document.getElementById('createDivisionDescInput').value = '';
   resetScheduleFields();
   document.getElementById('createBulkResults').innerHTML = '';
   document.getElementById('createModalSubmitBtn').textContent = cfg.submitLabel;
@@ -926,12 +934,14 @@ async function openEditModal(kind, item) {
   document.getElementById('createTextField').classList.toggle('hidden', !cfg.needsText);
   document.getElementById('createDivisionField').classList.toggle('hidden', kind !== 'wrapup' && kind !== 'schedule');
   document.getElementById('createScheduleFields').classList.toggle('hidden', kind !== 'schedule');
+  document.getElementById('createDivisionDescField').classList.toggle('hidden', kind !== 'division');
   document.getElementById('createBulkField').classList.add('hidden');
   document.getElementById('createNameInput').value = item.name || '';
   document.getElementById('createNameInput').placeholder = cfg.placeholder;
   if (cfg.needsText) {
     document.getElementById('createTextInput').innerHTML = (item.texts && item.texts[0] && item.texts[0].content) || '';
   }
+  document.getElementById('createDivisionDescInput').value = kind === 'division' ? item.description || '' : '';
   resetScheduleFields();
   if (kind === 'schedule') {
     document.getElementById('createScheduleStart').value = fromGenesysLocalDateTime(item.start);
@@ -1033,6 +1043,9 @@ document.getElementById('createModalSubmitBtn').addEventListener('click', async 
       rrule: document.getElementById('createScheduleRrule').value.trim(),
       description: document.getElementById('createScheduleDescription').value.trim(),
     } : null;
+    const divisionExtra = activeCreateKind === 'division' ? {
+      description: document.getElementById('createDivisionDescInput').value.trim(),
+    } : null;
 
     let hasError = false;
     if (!name) {
@@ -1064,10 +1077,10 @@ document.getElementById('createModalSubmitBtn').addEventListener('click', async 
     await withBusy(btn, activeEditItem ? 'Saving…' : 'Adding…', async () => {
       try {
         if (activeEditItem) {
-          await submitSingleEdit(activeCreateKind, activeEditItem, name, text, divisionId, scheduleExtra);
+          await submitSingleEdit(activeCreateKind, activeEditItem, name, text, divisionId, scheduleExtra, divisionExtra);
           showToast(`Saved "${name}".`);
         } else {
-          await submitSingleCreate(activeCreateKind, name, text, divisionId, scheduleExtra);
+          await submitSingleCreate(activeCreateKind, name, text, divisionId, scheduleExtra, divisionExtra);
           showToast(`Created "${name}"`);
         }
         closeOverlays();
@@ -1086,7 +1099,7 @@ document.getElementById('createModalSubmitBtn').addEventListener('click', async 
   }
 });
 
-async function submitSingleCreate(kind, name, text, divisionId, scheduleExtra) {
+async function submitSingleCreate(kind, name, text, divisionId, scheduleExtra, divisionExtra) {
   if (kind === 'canned') {
     const libraryId = document.getElementById('cannedLibrarySelect').value;
     if (!libraryId) throw new Error('Create or select a library first.');
@@ -1123,6 +1136,11 @@ async function submitSingleCreate(kind, name, text, divisionId, scheduleExtra) {
     if (divisionId) body.division = { id: divisionId };
     const created = await proxy('POST', '/api/v2/architect/schedules', { body });
     schedulesResource.prepend(created);
+  } else if (kind === 'division') {
+    await proxy('POST', '/api/v2/authorization/divisions', {
+      body: { name, description: divisionExtra.description || name },
+    });
+    await loadDivisions();
   }
 }
 
@@ -1164,7 +1182,7 @@ async function submitBulkCreate(kind, lines) {
   return results;
 }
 
-async function submitSingleEdit(kind, item, name, text, divisionId, scheduleExtra) {
+async function submitSingleEdit(kind, item, name, text, divisionId, scheduleExtra, divisionExtra) {
   if (kind === 'canned') {
     const libraries = (item.libraries || []).map((l) => ({ id: l.id }));
     const updated = await proxy('PUT', `/api/v2/responsemanagement/responses/${item.id}`, {
@@ -1198,14 +1216,21 @@ async function submitSingleEdit(kind, item, name, text, divisionId, scheduleExtr
     const updated = await proxy('PUT', `/api/v2/architect/schedules/${item.id}`, { body });
     schedulesResource.remove(item.id);
     schedulesResource.prepend(updated);
+  } else if (kind === 'division') {
+    await proxy('PUT', `/api/v2/authorization/divisions/${item.id}`, {
+      body: { name, description: divisionExtra.description || item.description || name },
+    });
+    await loadDivisions();
   }
 }
 
 // ---- Pick modal (members / wrap-up codes / libraries) ---------------------
 
-let activePickKind = null; // 'members' | 'wrapupAssign' | 'libraryChoose'
+let activePickKind = null; // 'members' | 'wrapupAssign' | 'libraryChoose' | 'divisionUsers'
 let pickSelection = new Set();
 let pickPool = []; // [{id, label}]
+let activePickDivisionId = null;
+let activePickDivisionName = '';
 
 function renderPickList() {
   const filterText = document.getElementById('pickModalFilter').value.trim().toLowerCase();
@@ -1261,11 +1286,22 @@ function openPickModal(kind) {
     document.getElementById('pickModalApplyBtn').textContent = 'Save';
     pickPool = allLibrariesCache.map((l) => ({ id: l.id, label: l.name }));
     if (queueIds.length === 1) currentQueueLibraryIds.forEach((id) => pickSelection.add(id));
+  } else if (kind === 'divisionUsers') {
+    document.getElementById('pickModalTitle').textContent = 'Manage division users';
+    document.getElementById('pickModalApplyBtn').textContent = 'Save';
+    pickPool = allUsersCache.map((u) => ({ id: u.id, label: u.email ? `${u.name} (${u.email})` : u.name }));
+    allUsersCache.forEach((u) => {
+      if (u.division && u.division.id === activePickDivisionId) pickSelection.add(u.id);
+    });
   }
 
-  const queueNames = getSelectedQueueNames();
-  document.getElementById('pickModalSubtitle').textContent =
-    queueNames.length === 1 ? `To ${queueNames[0]}` : queueNames.length ? `To ${queueNames.length} queues` : '';
+  if (kind === 'divisionUsers') {
+    document.getElementById('pickModalSubtitle').textContent = `To ${activePickDivisionName}`;
+  } else {
+    const queueNames = getSelectedQueueNames();
+    document.getElementById('pickModalSubtitle').textContent =
+      queueNames.length === 1 ? `To ${queueNames[0]}` : queueNames.length ? `To ${queueNames.length} queues` : '';
+  }
 
   document.getElementById('pickModalFilter').value = '';
   renderPickList();
@@ -1279,9 +1315,23 @@ document.getElementById('pickModalOverlay').addEventListener('click', (e) => { i
 
 document.getElementById('pickModalApplyBtn').addEventListener('click', async () => {
   const btn = document.getElementById('pickModalApplyBtn');
+  const ids = [...pickSelection];
+
+  if (activePickKind === 'divisionUsers') {
+    await withBusy(btn, 'Saving…', async () => {
+      try {
+        await saveDivisionUsers(activePickDivisionId, ids);
+        showToast('Division membership updated.');
+        closeOverlays();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+    return;
+  }
+
   const queueIds = getSelectedQueueIds();
   if (!queueIds.length) { showToast('Select at least one queue first.', true); return; }
-  const ids = [...pickSelection];
 
   await withBusy(btn, 'Saving…', async () => {
     try {
@@ -1712,7 +1762,7 @@ document.getElementById('membersAddBtn').addEventListener('click', () => {
 
 // ---- User directory ----------------------------------------------
 
-let allUsersCache = []; // {id, name, email}
+let allUsersCache = []; // {id, name, email, division}
 
 async function loadUserDirectory() {
   allUsersCache = [];
@@ -1725,7 +1775,7 @@ async function loadUserDirectory() {
     const data = await proxy('GET', '/api/v2/users', { query: { pageNumber, pageSize, expand: 'skills' } });
     total = data.total || 0;
     allUsersCache = allUsersCache.concat(
-      (data.entities || []).map((u) => ({ id: u.id, name: u.name, email: u.email, skills: (u.skills || []).map((s) => s.name) }))
+      (data.entities || []).map((u) => ({ id: u.id, name: u.name, email: u.email, skills: (u.skills || []).map((s) => s.name), division: u.division }))
     );
     pageNumber += 1;
   }
@@ -1972,9 +2022,37 @@ function renderDivisionTiles() {
   const container = document.getElementById('divisionsTableBody');
   container.innerHTML = '';
   divisionsCacheForUsers.forEach((division) => {
+    const manageBtn = el('span', { class: 'row-edit', text: 'Manage users' });
+    manageBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openDivisionUsersPicker(division);
+    });
+
+    const editBtn = el('span', { class: 'row-edit', text: 'Edit' });
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openEditModal('division', division);
+    });
+
+    const actions = el('div', { class: 'row-actions', style: 'justify-content:flex-start;margin-top:8px' }, [manageBtn, editBtn]);
+    if (!division.homeDivision) {
+      const del = el('span', { class: 'row-delete', text: 'Delete' });
+      del.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const ok = await confirmModal({
+          title: 'Delete division',
+          message: `Delete "${division.name}"? Divisions that still contain objects (users, queues, etc.) can't be deleted — you'll get an error instead. You'll have a few seconds to undo.`,
+        });
+        if (!ok) return;
+        deleteDivision(division);
+      });
+      actions.appendChild(del);
+    }
+
     const tile = el('div', { class: `tile division-tile${selectedDivisionFilter === division.id ? ' active' : ''}` }, [
       el('div', { class: 'title', text: division.name }),
       el('div', { class: 'sub', text: division.homeDivision ? 'Home division' : 'Division' }),
+      actions,
     ]);
     tile.addEventListener('click', () => {
       selectedDivisionFilter = selectedDivisionFilter === division.id ? '' : division.id;
@@ -1984,6 +2062,77 @@ function renderDivisionTiles() {
     });
     container.appendChild(tile);
   });
+}
+
+function deleteDivision(division) {
+  showUndoableDelete({
+    itemName: division.name,
+    remove: () => {
+      divisionsCacheForUsers = divisionsCacheForUsers.filter((d) => d.id !== division.id);
+      renderDivisionTiles();
+    },
+    restore: () => {
+      divisionsCacheForUsers.push(division);
+      renderDivisionTiles();
+    },
+    commit: async () => {
+      await proxy('DELETE', `/api/v2/authorization/divisions/${division.id}`);
+      await loadDivisions();
+    },
+  });
+}
+
+document.getElementById('divisionNewBtn').addEventListener('click', () => openCreateModal('division'));
+
+// Genesys divisions are mutually exclusive containers — an object belongs to exactly one at a
+// time, there's no separate "membership" concept. "Removing" a user from a division here means
+// moving them to the org's Home division, which is why it's cached and required before any removal.
+let homeDivisionId = null;
+async function ensureHomeDivisionId() {
+  if (!homeDivisionId) {
+    const home = await proxy('GET', '/api/v2/authorization/divisions/home');
+    homeDivisionId = home.id;
+  }
+  return homeDivisionId;
+}
+
+async function openDivisionUsersPicker(division) {
+  activePickDivisionId = division.id;
+  activePickDivisionName = division.name;
+  if (allUsersCache.length === 0) {
+    showToast('Loading user directory…');
+    try {
+      await loadUserDirectory();
+    } catch (err) {
+      showToast(err.message, true);
+      return;
+    }
+  }
+  openPickModal('divisionUsers');
+}
+
+async function saveDivisionUsers(divisionId, selectedUserIds) {
+  const currentlyInIds = allUsersCache.filter((u) => u.division && u.division.id === divisionId).map((u) => u.id);
+  const selectedSet = new Set(selectedUserIds);
+  const toAdd = selectedUserIds.filter((id) => !currentlyInIds.includes(id));
+  const toRemove = currentlyInIds.filter((id) => !selectedSet.has(id));
+  if (!toAdd.length && !toRemove.length) return;
+
+  if (toAdd.length) {
+    await proxy('POST', `/api/v2/authorization/divisions/${divisionId}/objects/USER`, { body: toAdd });
+  }
+  if (toRemove.length) {
+    const homeId = await ensureHomeDivisionId();
+    if (homeId !== divisionId) {
+      await proxy('POST', `/api/v2/authorization/divisions/${homeId}/objects/USER`, { body: toRemove });
+    }
+  }
+
+  // Re-fetch rather than hand-patch the caches — simpler and guarantees the users list, division
+  // tiles, and object counts all agree with what the server actually did.
+  await loadUserDirectory();
+  await usersResource.reset();
+  await loadDivisions();
 }
 
 async function loadDivisions() {
@@ -2366,10 +2515,11 @@ function architectQueryString(query) {
   return str ? `?${str}` : '';
 }
 
-function architectListRow({ title, sub, onDelete }) {
+function architectListRow({ title, sub, onDelete, extraActions }) {
   const mainChildren = [el('div', { class: 'list-row-title', text: title })];
   if (sub) mainChildren.push(el('div', { class: 'list-row-sub', text: sub }));
   const actions = el('div', { class: 'list-row-actions' });
+  (extraActions || []).forEach(({ label, onclick }) => actions.appendChild(el('button', { class: 'btn btn-subtle', text: label, onclick })));
   if (onDelete) actions.appendChild(el('button', { class: 'btn btn-subtle', text: 'Delete', onclick: onDelete }));
   return el('div', { class: 'list-row' }, [el('div', { class: 'list-row-main' }, mainChildren), actions]);
 }
@@ -2445,8 +2595,20 @@ function renderArchitectPrompts() {
   const container = document.getElementById('architectPromptsList');
   container.innerHTML = '';
   architectPromptsState.items.forEach((prompt) => {
+    const langCount = Array.isArray(prompt.resources) ? prompt.resources.length : null;
+    const sub = [prompt.description, langCount !== null ? `${langCount} language${langCount === 1 ? '' : 's'}` : null]
+      .filter(Boolean)
+      .join(' · ');
     container.appendChild(
-      architectListRow({ title: prompt.name, sub: prompt.description || '', onDelete: () => deleteArchitectPrompt(prompt) })
+      architectListRow({
+        title: prompt.name,
+        sub,
+        extraActions: [
+          { label: 'Languages', onclick: () => openPromptLanguagesModal(prompt) },
+          { label: 'Export', onclick: () => exportPrompt(prompt) },
+        ],
+        onDelete: () => deleteArchitectPrompt(prompt),
+      })
     );
   });
   document.getElementById('architectPromptsEmpty').classList.toggle('hidden', architectPromptsState.items.length > 0);
@@ -2506,6 +2668,354 @@ document.getElementById('architectPromptAddBtn').addEventListener('click', async
   } catch (err) {
     showError('architectPromptsError', err.message);
   }
+});
+
+// -- prompt languages (per-prompt TTS text, one entry per language) --
+// No Genesys endpoint lists "available prompt languages" (the closest, GET /api/v2/languages, is
+// deprecated and returns org routing languages instead) — this is the standard set of locale
+// codes Architect prompts accept, curated from Genesys Cloud's own language picker.
+const PROMPT_LANGUAGES = [
+  ['ar-il', 'Arabic (Israel)'],
+  ['ca-es', 'Catalan (Spain)'],
+  ['cs-cz', 'Czech (Czech Republic)'],
+  ['cy-gb', 'Welsh (UK)'],
+  ['da-dk', 'Danish (Denmark)'],
+  ['de-de', 'German (Germany)'],
+  ['el-gr', 'Greek (Greece)'],
+  ['en-au', 'English (Australia)'],
+  ['en-ca', 'English (Canada)'],
+  ['en-gb', 'English (UK)'],
+  ['en-in', 'English (India)'],
+  ['en-us', 'English (US)'],
+  ['en-za', 'English (South Africa)'],
+  ['es-es', 'Spanish (Spain)'],
+  ['es-mx', 'Spanish (Mexico)'],
+  ['es-us', 'Spanish (US)'],
+  ['et-ee', 'Estonian (Estonia)'],
+  ['fi-fi', 'Finnish (Finland)'],
+  ['fr-ca', 'French (Canada)'],
+  ['fr-fr', 'French (France)'],
+  ['he-il', 'Hebrew (Israel)'],
+  ['hi-in', 'Hindi (India)'],
+  ['hr-hr', 'Croatian (Croatia)'],
+  ['hu-hu', 'Hungarian (Hungary)'],
+  ['id-id', 'Indonesian (Indonesia)'],
+  ['it-it', 'Italian (Italy)'],
+  ['ja-jp', 'Japanese (Japan)'],
+  ['ko-kr', 'Korean (Korea)'],
+  ['lt-lt', 'Lithuanian (Lithuania)'],
+  ['lv-lv', 'Latvian (Latvia)'],
+  ['ms-my', 'Malay (Malaysia)'],
+  ['nb-no', 'Norwegian Bokmål (Norway)'],
+  ['nl-nl', 'Dutch (Netherlands)'],
+  ['pl-pl', 'Polish (Poland)'],
+  ['pt-br', 'Portuguese (Brazil)'],
+  ['pt-pt', 'Portuguese (Portugal)'],
+  ['ro-ro', 'Romanian (Romania)'],
+  ['ru-ru', 'Russian (Russia)'],
+  ['sk-sk', 'Slovak (Slovakia)'],
+  ['sl-si', 'Slovenian (Slovenia)'],
+  ['sv-se', 'Swedish (Sweden)'],
+  ['th-th', 'Thai (Thailand)'],
+  ['tr-tr', 'Turkish (Turkey)'],
+  ['uk-ua', 'Ukrainian (Ukraine)'],
+  ['vi-vn', 'Vietnamese (Vietnam)'],
+  ['zh-cn', 'Chinese, Simplified (China)'],
+  ['zh-hk', 'Chinese, Traditional (Hong Kong)'],
+  ['zh-tw', 'Chinese, Traditional (Taiwan)'],
+];
+const PROMPT_LANGUAGE_LABELS = Object.fromEntries(PROMPT_LANGUAGES);
+
+function downloadJson(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = el('a', { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function promptExportShape(prompt) {
+  return {
+    name: prompt.name,
+    description: prompt.description || '',
+    resources: (prompt.resources || [])
+      .filter((r) => r.ttsString)
+      .map((r) => ({ language: r.language, ttsString: r.ttsString })),
+  };
+}
+
+async function fetchPromptWithResources(promptId) {
+  return architectApi('GET', `/prompts/${encodeURIComponent(promptId)}${architectQueryString({ includeResources: true })}`);
+}
+
+async function exportPrompt(prompt) {
+  try {
+    const full = await fetchPromptWithResources(prompt.id);
+    downloadJson(`prompt-${full.name.replace(/[^a-z0-9-]+/gi, '_')}.json`, promptExportShape(full));
+    showToast(`Exported "${full.name}".`);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+document.getElementById('architectPromptsExportAllBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('architectPromptsExportAllBtn');
+  await withBusy(btn, 'Exporting…', async () => {
+    try {
+      // Walks every page independent of whatever the on-screen list has loaded so far, so
+      // "export all" really means all prompts in the org, not just the ones scrolled into view.
+      const all = [];
+      let pageNumber = 1;
+      let total = Infinity;
+      while (all.length < total) {
+        const data = await architectApi(
+          'GET',
+          `/prompts${architectQueryString({ pageNumber, pageSize: 50, includeResources: true })}`
+        );
+        total = data.total || 0;
+        all.push(...(data.entities || []));
+        if (!data.entities || !data.entities.length) break;
+        pageNumber += 1;
+      }
+      downloadJson('prompts-export.json', all.map(promptExportShape));
+      showToast(`Exported ${all.length} prompt${all.length === 1 ? '' : 's'}.`);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+});
+
+document.getElementById('architectPromptsImportBtn').addEventListener('click', () => {
+  document.getElementById('architectPromptsImportFile').click();
+});
+
+document.getElementById('architectPromptsImportFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+
+  const summaryEl = document.getElementById('architectPromptsImportSummary');
+  summaryEl.classList.add('hidden');
+  showError('architectPromptsError', '');
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (err) {
+    return showError('architectPromptsError', `Not valid JSON: ${err.message}`);
+  }
+  const prompts = Array.isArray(parsed) ? parsed : [parsed];
+  if (!prompts.length) return showError('architectPromptsError', 'File has no prompts to import.');
+
+  const btn = document.getElementById('architectPromptsImportBtn');
+  await withBusy(btn, 'Importing…', async () => {
+    const results = [];
+    for (const item of prompts) {
+      const name = item && item.name && String(item.name).trim();
+      if (!name) {
+        results.push({ ok: false, label: '(unnamed)', message: 'missing "name"' });
+        continue;
+      }
+      try {
+        // Reuse an existing prompt with the same name (case-insensitive) instead of duplicating it.
+        let target = architectPromptsState.items.find((p) => p.name.toLowerCase() === name.toLowerCase());
+        if (!target) {
+          const found = await architectApi('GET', `/prompts${architectQueryString({ name, pageSize: 1 })}`);
+          target = (found.entities || [])[0];
+        }
+        if (target) {
+          target = await architectApi('PUT', `/prompts/${encodeURIComponent(target.id)}`, {
+            name,
+            description: item.description || '',
+          });
+        } else {
+          target = await architectApi('POST', '/prompts', { name, description: item.description || '' });
+          architectPromptsState.items.unshift(target);
+          architectPromptsState.total += 1;
+        }
+
+        const resources = Array.isArray(item.resources) ? item.resources : [];
+        let langOk = 0;
+        for (const res of resources) {
+          const language = res && res.language && String(res.language).trim().toLowerCase();
+          if (!language) continue;
+          try {
+            const exists = await architectApi('GET', `/prompts/${encodeURIComponent(target.id)}/resources/${encodeURIComponent(language)}`).catch(() => null);
+            if (exists) {
+              await architectApi('PUT', `/prompts/${encodeURIComponent(target.id)}/resources/${encodeURIComponent(language)}`, {
+                ttsString: res.ttsString || '',
+              });
+            } else {
+              await architectApi('POST', `/prompts/${encodeURIComponent(target.id)}/resources`, {
+                language,
+                ttsString: res.ttsString || '',
+              });
+            }
+            langOk += 1;
+          } catch {
+            // one bad language shouldn't sink the whole prompt import; reflected in the langOk count
+          }
+        }
+        // renderBulkResults only shows `message` on failed rows, so fold the language count into
+        // the label itself to keep it visible on success too.
+        const langNote = resources.length ? ` (${langOk}/${resources.length} language${resources.length === 1 ? '' : 's'})` : '';
+        results.push({ ok: langOk === resources.length, label: `${name}${langNote}`, message: langOk === resources.length ? '' : 'one or more languages failed to import' });
+      } catch (err) {
+        results.push({ ok: false, label: name, message: err.message });
+      }
+    }
+    renderArchitectPrompts();
+    summaryEl.classList.remove('hidden');
+    renderBulkResults('architectPromptsImportSummary', results);
+    const okCount = results.filter((r) => r.ok).length;
+    showToast(`Imported ${okCount} of ${results.length} prompt${results.length === 1 ? '' : 's'}.`, okCount < results.length);
+  });
+});
+
+async function openPromptLanguagesModal(prompt) {
+  document.getElementById('promptModalTitle').textContent = prompt.name;
+  document.getElementById('promptModalSubtitle').textContent = prompt.description || '';
+  const body = document.getElementById('promptModalBody');
+  body.innerHTML = '';
+  body.appendChild(el('p', { class: 'usage-note', text: 'Loading…' }));
+  document.getElementById('promptModalOverlay').classList.remove('hidden');
+  document.getElementById('promptModalOverlay').dataset.promptId = prompt.id;
+
+  await reloadPromptLanguagesModal(prompt.id);
+}
+
+async function reloadPromptLanguagesModal(promptId) {
+  const body = document.getElementById('promptModalBody');
+  try {
+    const full = await fetchPromptWithResources(promptId);
+    document.getElementById('promptModalSubtitle').textContent = full.description || '';
+
+    // Keep the background list's language count in sync with what the modal just loaded.
+    const cached = architectPromptsState.items.find((p) => p.id === promptId);
+    if (cached) {
+      cached.resources = full.resources || [];
+      cached.description = full.description;
+      renderArchitectPrompts();
+    }
+
+    body.innerHTML = '';
+
+    const existing = (full.resources || []).slice().sort((a, b) => a.language.localeCompare(b.language));
+    if (!existing.length) {
+      body.appendChild(el('p', { class: 'empty-note', text: 'No languages added yet.' }));
+    }
+    existing.forEach((res) => {
+      const textarea = el('textarea', {
+        class: 'text-input',
+        rows: '2',
+        style: 'font-size:12.5px',
+        text: res.ttsString || '',
+      });
+      const errorEl = el('p', { class: 'field-inline-error hidden' });
+      const saveBtn = el('button', {
+        class: 'btn btn-subtle',
+        text: 'Save',
+        onclick: async () => {
+          errorEl.classList.add('hidden');
+          try {
+            await withBusy(saveBtn, 'Saving…', () =>
+              architectApi('PUT', `/prompts/${encodeURIComponent(promptId)}/resources/${encodeURIComponent(res.language)}`, {
+                ttsString: textarea.value,
+              })
+            );
+            showToast(`Saved ${PROMPT_LANGUAGE_LABELS[res.language] || res.language}.`);
+          } catch (err) {
+            errorEl.textContent = err.message;
+            errorEl.classList.remove('hidden');
+          }
+        },
+      });
+      const deleteBtn = el('button', {
+        class: 'btn btn-subtle',
+        text: 'Delete',
+        onclick: async () => {
+          try {
+            await withBusy(deleteBtn, 'Deleting…', () =>
+              architectApi('DELETE', `/prompts/${encodeURIComponent(promptId)}/resources/${encodeURIComponent(res.language)}`)
+            );
+            await reloadPromptLanguagesModal(promptId);
+          } catch (err) {
+            errorEl.textContent = err.message;
+            errorEl.classList.remove('hidden');
+          }
+        },
+      });
+      body.appendChild(
+        el('div', { class: 'detail-row', style: 'align-items:flex-start;flex-direction:column;gap:6px' }, [
+          el('div', { style: 'display:flex;width:100%;justify-content:space-between;align-items:center' }, [
+            el('span', { class: 'k', text: PROMPT_LANGUAGE_LABELS[res.language] || res.language }),
+            el('div', { style: 'display:flex;gap:6px' }, [saveBtn, deleteBtn]),
+          ]),
+          textarea,
+          errorEl,
+        ])
+      );
+    });
+
+    // -- add a new language --
+    const usedCodes = new Set(existing.map((r) => r.language));
+    const available = PROMPT_LANGUAGES.filter(([code]) => !usedCodes.has(code));
+    if (available.length) {
+      const select = el('select', { class: 'text-input', style: 'padding:9px 12px;font-size:12.5px' });
+      available.forEach(([code, label]) => select.appendChild(el('option', { value: code, text: label })));
+      const newTextarea = el('textarea', {
+        class: 'text-input',
+        rows: '2',
+        style: 'font-size:12.5px',
+        placeholder: 'TTS text for this language…',
+      });
+      const addErrorEl = el('p', { class: 'field-inline-error hidden' });
+      const addBtn = el('button', {
+        class: 'btn btn-accent',
+        text: '+ Add language',
+        onclick: async () => {
+          addErrorEl.classList.add('hidden');
+          try {
+            await withBusy(addBtn, 'Adding…', () =>
+              architectApi('POST', `/prompts/${encodeURIComponent(promptId)}/resources`, {
+                language: select.value,
+                ttsString: newTextarea.value,
+              })
+            );
+            showToast(`Added ${PROMPT_LANGUAGE_LABELS[select.value] || select.value}.`);
+            await reloadPromptLanguagesModal(promptId);
+          } catch (err) {
+            addErrorEl.textContent = err.message;
+            addErrorEl.classList.remove('hidden');
+          }
+        },
+      });
+      body.appendChild(
+        el('div', { class: 'detail-row', style: 'align-items:flex-start;flex-direction:column;gap:6px;margin-top:12px;border-top:1px solid var(--border);padding-top:12px' }, [
+          el('span', { class: 'k', text: 'Add a language' }),
+          select,
+          newTextarea,
+          addBtn,
+          addErrorEl,
+        ])
+      );
+    }
+  } catch (err) {
+    body.innerHTML = '';
+    body.appendChild(el('p', { class: 'field-error', text: err.message }));
+  }
+}
+
+document.getElementById('promptModalCloseBtn').addEventListener('click', () => document.getElementById('promptModalOverlay').classList.add('hidden'));
+document.getElementById('promptModalOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'promptModalOverlay') document.getElementById('promptModalOverlay').classList.add('hidden');
+});
+document.getElementById('promptModalExportBtn').addEventListener('click', async () => {
+  const promptId = document.getElementById('promptModalOverlay').dataset.promptId;
+  const target = architectPromptsState.items.find((p) => p.id === promptId);
+  if (target) exportPrompt(target);
 });
 
 // -- flow generation (AI extracts params, user reviews, then deploy) --

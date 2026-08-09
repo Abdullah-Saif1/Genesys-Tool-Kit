@@ -239,8 +239,12 @@
             </div>
             <button id="usersLoadMoreBtn" class="btn btn-outline hidden" style="margin-bottom:22px">Load more</button>
             <p id="usersError" class="field-error hidden" style="margin-bottom:14px"></p>
-            <div style="font-weight:600;font-size:14px;margin-bottom:10px">Divisions <span class="sub" style="font-weight:400;color:var(--text-faint)">(click to filter users)</span></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <div style="font-weight:600;font-size:14px">Divisions <span class="sub" style="font-weight:400;color:var(--text-faint)">(click a tile to filter users)</span></div>
+              <button id="divisionNewBtn" class="btn btn-subtle">+ New division</button>
+            </div>
             <div id="divisionsTableBody" class="tile-grid"></div>
+            <p id="divisionsError" class="field-error hidden" style="margin-top:10px"></p>
           </section>
 
           <!-- Skills -->
@@ -296,7 +300,13 @@
               <div class="card card-pad">
                 <div class="detail-card-head">
                   <div class="detail-card-title">Prompts</div>
+                  <div style="display:flex;gap:8px">
+                    <input type="file" id="architectPromptsImportFile" accept="application/json" class="hidden" />
+                    <button id="architectPromptsImportBtn" class="btn btn-subtle">&#8593; Import</button>
+                    <button id="architectPromptsExportAllBtn" class="btn btn-subtle">&#8595; Export all</button>
+                  </div>
                 </div>
+                <div class="notice-box" style="margin-bottom:12px">Each prompt can hold TTS text in multiple languages. Use <b>Languages</b> on a prompt to manage them, or Export/Import to move a prompt (with all its languages) between orgs.</div>
                 <div class="toolbar-row" style="margin-bottom:12px">
                   <input type="text" id="architectPromptName" class="text-input" style="padding:9px 12px;font-size:12.5px" placeholder="New prompt name" />
                   <input type="text" id="architectPromptDescription" class="text-input" style="padding:9px 12px;font-size:12.5px" placeholder="Description (optional)" />
@@ -306,6 +316,7 @@
                 <p id="architectPromptsEmpty" class="empty-note hidden">No prompts yet.</p>
                 <p id="architectPromptsError" class="field-error hidden" style="margin-top:10px"></p>
                 <button id="architectPromptsLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+                <p id="architectPromptsImportSummary" class="usage-note hidden" style="margin-top:12px"></p>
               </div>
 
               <div class="card card-pad">
@@ -470,6 +481,21 @@
       </div>
     </div>
 
+    <!-- ===== Prompt languages modal ===== -->
+    <div id="promptModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card wide">
+        <div class="modal-head">
+          <div class="title" id="promptModalTitle"></div>
+          <div class="sub" id="promptModalSubtitle"></div>
+        </div>
+        <div class="modal-body" id="promptModalBody"></div>
+        <div class="modal-foot">
+          <button id="promptModalExportBtn" class="btn btn-subtle">&#8595; Export this prompt</button>
+          <button id="promptModalCloseBtn" class="btn btn-outline">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== User drill-in modal ===== -->
     <div id="userModalOverlay" class="modal-overlay hidden">
       <div class="modal-card wide">
@@ -541,6 +567,10 @@
 
             <div class="field-label" style="margin-top:12px">Description <span class="sub" style="font-weight:400">(optional)</span></div>
             <textarea id="createScheduleDescription" class="text-input" rows="2"></textarea>
+          </div>
+          <div id="createDivisionDescField" class="hidden">
+            <div class="field-label">Description <span class="sub" style="font-weight:400">(optional &mdash; defaults to the name)</span></div>
+            <textarea id="createDivisionDescInput" class="text-input" rows="2" placeholder="e.g. West region contact center"></textarea>
           </div>
           <div id="createBulkField" class="hidden">
             <div class="field-label" id="createBulkLabel"></div>

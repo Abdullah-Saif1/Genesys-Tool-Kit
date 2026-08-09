@@ -445,7 +445,12 @@ module.exports = function createArchitectRouter({ getValidToken, saveSession, RE
   router.get('/prompts', requireGenesysAuth, async (req, res) => {
     try {
       const data = await gcRequest(req, 'GET', '/api/v2/architect/prompts', {
-        query: { pageSize: req.query.pageSize || 50, pageNumber: req.query.pageNumber || 1, name: req.query.name },
+        query: {
+          pageSize: req.query.pageSize || 50,
+          pageNumber: req.query.pageNumber || 1,
+          name: req.query.name,
+          includeResources: req.query.includeResources,
+        },
       });
       res.json(data);
     } catch (err) {
@@ -464,9 +469,89 @@ module.exports = function createArchitectRouter({ getValidToken, saveSession, RE
     }
   });
 
+  router.get('/prompts/:id', requireGenesysAuth, async (req, res) => {
+    try {
+      const data = await gcRequest(req, 'GET', `/api/v2/architect/prompts/${encodeURIComponent(req.params.id)}`, {
+        query: { includeResources: req.query.includeResources },
+      });
+      res.json(data);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.put('/prompts/:id', requireGenesysAuth, async (req, res) => {
+    try {
+      const { name, description } = req.body || {};
+      if (!name) return res.status(400).json({ error: 'name is required' });
+      const data = await gcRequest(req, 'PUT', `/api/v2/architect/prompts/${encodeURIComponent(req.params.id)}`, {
+        body: { name, description },
+      });
+      res.json(data);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
   router.delete('/prompts/:id', requireGenesysAuth, async (req, res) => {
     try {
       await gcRequest(req, 'DELETE', `/api/v2/architect/prompts/${encodeURIComponent(req.params.id)}`);
+      res.json({ ok: true });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ---- Prompt language resources (TTS text per language) ----
+
+  router.get('/prompts/:id/resources/:language', requireGenesysAuth, async (req, res) => {
+    try {
+      const data = await gcRequest(
+        req,
+        'GET',
+        `/api/v2/architect/prompts/${encodeURIComponent(req.params.id)}/resources/${encodeURIComponent(req.params.language)}`
+      );
+      res.json(data);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.post('/prompts/:id/resources', requireGenesysAuth, async (req, res) => {
+    try {
+      const { language, ttsString } = req.body || {};
+      if (!language) return res.status(400).json({ error: 'language is required' });
+      const data = await gcRequest(req, 'POST', `/api/v2/architect/prompts/${encodeURIComponent(req.params.id)}/resources`, {
+        body: { language, ttsString },
+      });
+      res.json(data);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.put('/prompts/:id/resources/:language', requireGenesysAuth, async (req, res) => {
+    try {
+      const { ttsString } = req.body || {};
+      const data = await gcRequest(
+        req,
+        'PUT',
+        `/api/v2/architect/prompts/${encodeURIComponent(req.params.id)}/resources/${encodeURIComponent(req.params.language)}`,
+        { body: { language: req.params.language, ttsString } }
+      );
+      res.json(data);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.delete('/prompts/:id/resources/:language', requireGenesysAuth, async (req, res) => {
+    try {
+      await gcRequest(
+        req,
+        'DELETE',
+        `/api/v2/architect/prompts/${encodeURIComponent(req.params.id)}/resources/${encodeURIComponent(req.params.language)}`
+      );
       res.json({ ok: true });
     } catch (err) {
       sendError(res, err);
