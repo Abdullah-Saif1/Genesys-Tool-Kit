@@ -2515,35 +2515,80 @@ function architectQueryString(query) {
   return str ? `?${str}` : '';
 }
 
-function architectListRow({ title, sub, onDelete, extraActions }) {
+function architectListRow({ title, sub, onDelete, extraActions, checkbox }) {
   const mainChildren = [el('div', { class: 'list-row-title', text: title })];
   if (sub) mainChildren.push(el('div', { class: 'list-row-sub', text: sub }));
   const actions = el('div', { class: 'list-row-actions' });
   (extraActions || []).forEach(({ label, onclick }) => actions.appendChild(el('button', { class: 'btn btn-subtle', text: label, onclick })));
   if (onDelete) actions.appendChild(el('button', { class: 'btn btn-subtle', text: 'Delete', onclick: onDelete }));
-  return el('div', { class: 'list-row' }, [el('div', { class: 'list-row-main' }, mainChildren), actions]);
+  const rowChildren = [];
+  if (checkbox) {
+    const box = el('input', { type: 'checkbox', class: 'list-row-checkbox' });
+    box.checked = checkbox.checked;
+    box.addEventListener('click', (e) => e.stopPropagation());
+    box.addEventListener('change', () => checkbox.onChange(box.checked));
+    rowChildren.push(box);
+  }
+  rowChildren.push(el('div', { class: 'list-row-main' }, mainChildren), actions);
+  return el('div', { class: 'list-row' }, rowChildren);
 }
 
 // -- flows --
 
 const architectFlowsState = { items: [], pageNumber: 0, total: 0 };
 
+const selectedFlowIds = new Set();
+let architectFlowsVisibleIds = [];
+
+function getSelectedFlowIds() {
+  return [...selectedFlowIds];
+}
+function getSelectedFlowNames() {
+  return architectFlowsState.items.filter((f) => selectedFlowIds.has(f.id)).map((f) => f.name);
+}
+function toggleFlowSelection(id, checked) {
+  if (checked) selectedFlowIds.add(id);
+  else selectedFlowIds.delete(id);
+  renderArchitectFlowsBulkBar();
+}
+function renderArchitectFlowsBulkBar() {
+  const ids = getSelectedFlowIds();
+  document.getElementById('architectFlowsBulkBar').classList.toggle('hidden', ids.length === 0);
+  document.getElementById('architectFlowsBulkCount').textContent = `${ids.length} selected`;
+  document.getElementById('architectFlowsSelectAll').checked =
+    architectFlowsVisibleIds.length > 0 && architectFlowsVisibleIds.every((id) => selectedFlowIds.has(id));
+}
+function flowExportShape(flow) {
+  return {
+    id: flow.id,
+    name: flow.name,
+    type: flow.type,
+    description: flow.description || '',
+    division: (flow.division && flow.division.name) || '',
+    active: !!flow.active,
+    published: !!flow.publishedVersion,
+  };
+}
+
 function renderArchitectFlows() {
   const filterText = document.getElementById('architectFlowsFilter').value.trim().toLowerCase();
   const container = document.getElementById('architectFlowsList');
   container.innerHTML = '';
   const filtered = architectFlowsState.items.filter((flow) => !filterText || (flow.name || '').toLowerCase().includes(filterText));
+  architectFlowsVisibleIds = filtered.map((f) => f.id);
   filtered.forEach((flow) => {
     container.appendChild(
       architectListRow({
         title: flow.name,
         sub: `${flow.type || ''} · ${flow.publishedVersion ? 'published' : 'unpublished'}`,
+        checkbox: { checked: selectedFlowIds.has(flow.id), onChange: (checked) => toggleFlowSelection(flow.id, checked) },
         onDelete: () => deleteArchitectFlow(flow),
       })
     );
   });
   document.getElementById('architectFlowsEmpty').classList.toggle('hidden', filtered.length > 0);
   document.getElementById('architectFlowsLoadMoreBtn').classList.toggle('hidden', architectFlowsState.items.length >= architectFlowsState.total);
+  renderArchitectFlowsBulkBar();
 }
 
 async function fetchArchitectFlowsPage(pageNumber) {
@@ -2563,16 +2608,19 @@ async function resetArchitectFlows() {
 }
 
 function deleteArchitectFlow(flow) {
+  const wasSelected = selectedFlowIds.has(flow.id);
   showUndoableDelete({
     itemName: flow.name,
     remove: () => {
       architectFlowsState.items = architectFlowsState.items.filter((f) => f.id !== flow.id);
       architectFlowsState.total = Math.max(0, architectFlowsState.total - 1);
+      selectedFlowIds.delete(flow.id);
       renderArchitectFlows();
     },
     restore: () => {
       architectFlowsState.items.unshift(flow);
       architectFlowsState.total += 1;
+      if (wasSelected) selectedFlowIds.add(flow.id);
       renderArchitectFlows();
     },
     commit: () => architectApi('DELETE', `/flows/${encodeURIComponent(flow.id)}`),
@@ -2587,13 +2635,91 @@ document.getElementById('architectFlowsLoadMoreBtn').addEventListener('click', (
   fetchArchitectFlowsPage(architectFlowsState.pageNumber + 1).catch((err) => showError('architectFlowsError', err.message));
 });
 
+document.getElementById('architectFlowsSelectAll').addEventListener('change', (e) => {
+  if (e.target.checked) architectFlowsVisibleIds.forEach((id) => selectedFlowIds.add(id));
+  else architectFlowsVisibleIds.forEach((id) => selectedFlowIds.delete(id));
+  renderArchitectFlows();
+});
+
+document.getElementById('architectFlowsClearSelectedBtn').addEventListener('click', () => {
+  selectedFlowIds.clear();
+  renderArchitectFlows();
+});
+
+document.getElementById('architectFlowsExportSelectedBtn').addEventListener('click', () => {
+  const ids = getSelectedFlowIds();
+  if (!ids.length) return;
+  const flows = architectFlowsState.items.filter((f) => ids.includes(f.id));
+  downloadJson('flows-export.json', flows.map(flowExportShape));
+  showToast(`Exported ${flows.length} flow${flows.length === 1 ? '' : 's'}.`);
+});
+
+document.getElementById('architectFlowsDeleteSelectedBtn').addEventListener('click', async () => {
+  const ids = getSelectedFlowIds();
+  if (!ids.length) return;
+  const names = getSelectedFlowNames();
+  const count = ids.length;
+  const listLabel = names.length <= 5 ? names.join(', ') : `${count} flows`;
+
+  const ok = await confirmModal({
+    title: `Delete ${count} flow${count === 1 ? '' : 's'}`,
+    message: `Delete ${listLabel}? You'll have a few seconds to undo before ${count === 1 ? 'it is' : 'they are'} actually removed.`,
+  });
+  if (!ok) return;
+
+  const flowsToDelete = architectFlowsState.items.filter((f) => ids.includes(f.id));
+  showUndoableDelete({
+    itemName: count === 1 ? names[0] : `${count} flows`,
+    remove: () => {
+      architectFlowsState.items = architectFlowsState.items.filter((f) => !ids.includes(f.id));
+      architectFlowsState.total = Math.max(0, architectFlowsState.total - ids.length);
+      ids.forEach((id) => selectedFlowIds.delete(id));
+      renderArchitectFlows();
+    },
+    restore: () => {
+      flowsToDelete.forEach((f) => architectFlowsState.items.unshift(f));
+      architectFlowsState.total += flowsToDelete.length;
+      ids.forEach((id) => selectedFlowIds.add(id));
+      renderArchitectFlows();
+    },
+    commit: async () => {
+      const results = await Promise.allSettled(ids.map((id) => architectApi('DELETE', `/flows/${encodeURIComponent(id)}`)));
+      const failed = results.filter((r) => r.status === 'rejected');
+      if (failed.length) throw new Error(`${failed.length} of ${count} could not be deleted`);
+    },
+  });
+});
+
 // -- prompts --
 
 const architectPromptsState = { items: [], pageNumber: 0, total: 0 };
 
+const selectedPromptIds = new Set();
+let architectPromptsVisibleIds = [];
+
+function getSelectedPromptIds() {
+  return [...selectedPromptIds];
+}
+function getSelectedPromptNames() {
+  return architectPromptsState.items.filter((p) => selectedPromptIds.has(p.id)).map((p) => p.name);
+}
+function togglePromptSelection(id, checked) {
+  if (checked) selectedPromptIds.add(id);
+  else selectedPromptIds.delete(id);
+  renderArchitectPromptsBulkBar();
+}
+function renderArchitectPromptsBulkBar() {
+  const ids = getSelectedPromptIds();
+  document.getElementById('architectPromptsBulkBar').classList.toggle('hidden', ids.length === 0);
+  document.getElementById('architectPromptsBulkCount').textContent = `${ids.length} selected`;
+  document.getElementById('architectPromptsSelectAll').checked =
+    architectPromptsVisibleIds.length > 0 && architectPromptsVisibleIds.every((id) => selectedPromptIds.has(id));
+}
+
 function renderArchitectPrompts() {
   const container = document.getElementById('architectPromptsList');
   container.innerHTML = '';
+  architectPromptsVisibleIds = architectPromptsState.items.map((p) => p.id);
   architectPromptsState.items.forEach((prompt) => {
     const langCount = Array.isArray(prompt.resources) ? prompt.resources.length : null;
     const sub = [prompt.description, langCount !== null ? `${langCount} language${langCount === 1 ? '' : 's'}` : null]
@@ -2603,6 +2729,7 @@ function renderArchitectPrompts() {
       architectListRow({
         title: prompt.name,
         sub,
+        checkbox: { checked: selectedPromptIds.has(prompt.id), onChange: (checked) => togglePromptSelection(prompt.id, checked) },
         extraActions: [
           { label: 'Languages', onclick: () => openPromptLanguagesModal(prompt) },
           { label: 'Export', onclick: () => exportPrompt(prompt) },
@@ -2613,6 +2740,7 @@ function renderArchitectPrompts() {
   });
   document.getElementById('architectPromptsEmpty').classList.toggle('hidden', architectPromptsState.items.length > 0);
   document.getElementById('architectPromptsLoadMoreBtn').classList.toggle('hidden', architectPromptsState.items.length >= architectPromptsState.total);
+  renderArchitectPromptsBulkBar();
 }
 
 async function fetchArchitectPromptsPage(pageNumber) {
@@ -2632,16 +2760,19 @@ async function resetArchitectPrompts() {
 }
 
 function deleteArchitectPrompt(prompt) {
+  const wasSelected = selectedPromptIds.has(prompt.id);
   showUndoableDelete({
     itemName: prompt.name,
     remove: () => {
       architectPromptsState.items = architectPromptsState.items.filter((p) => p.id !== prompt.id);
       architectPromptsState.total = Math.max(0, architectPromptsState.total - 1);
+      selectedPromptIds.delete(prompt.id);
       renderArchitectPrompts();
     },
     restore: () => {
       architectPromptsState.items.unshift(prompt);
       architectPromptsState.total += 1;
+      if (wasSelected) selectedPromptIds.add(prompt.id);
       renderArchitectPrompts();
     },
     commit: () => architectApi('DELETE', `/prompts/${encodeURIComponent(prompt.id)}`),
@@ -2650,6 +2781,69 @@ function deleteArchitectPrompt(prompt) {
 
 document.getElementById('architectPromptsLoadMoreBtn').addEventListener('click', () => {
   fetchArchitectPromptsPage(architectPromptsState.pageNumber + 1).catch((err) => showError('architectPromptsError', err.message));
+});
+
+document.getElementById('architectPromptsSelectAll').addEventListener('change', (e) => {
+  if (e.target.checked) architectPromptsVisibleIds.forEach((id) => selectedPromptIds.add(id));
+  else architectPromptsVisibleIds.forEach((id) => selectedPromptIds.delete(id));
+  renderArchitectPrompts();
+});
+
+document.getElementById('architectPromptsClearSelectedBtn').addEventListener('click', () => {
+  selectedPromptIds.clear();
+  renderArchitectPrompts();
+});
+
+document.getElementById('architectPromptsExportSelectedBtn').addEventListener('click', async () => {
+  const ids = getSelectedPromptIds();
+  if (!ids.length) return;
+  const btn = document.getElementById('architectPromptsExportSelectedBtn');
+  await withBusy(btn, 'Exporting…', async () => {
+    const results = await Promise.allSettled(ids.map((id) => fetchPromptWithResources(id)));
+    const ok = results.filter((r) => r.status === 'fulfilled').map((r) => promptExportShape(r.value));
+    const failedCount = results.length - ok.length;
+    if (ok.length) downloadJson('prompts-export-selected.json', ok);
+    showToast(
+      failedCount ? `Exported ${ok.length} of ${results.length} prompts (${failedCount} failed).` : `Exported ${ok.length} prompt${ok.length === 1 ? '' : 's'}.`,
+      !!failedCount
+    );
+  });
+});
+
+document.getElementById('architectPromptsDeleteSelectedBtn').addEventListener('click', async () => {
+  const ids = getSelectedPromptIds();
+  if (!ids.length) return;
+  const names = getSelectedPromptNames();
+  const count = ids.length;
+  const listLabel = names.length <= 5 ? names.join(', ') : `${count} prompts`;
+
+  const ok = await confirmModal({
+    title: `Delete ${count} prompt${count === 1 ? '' : 's'}`,
+    message: `Delete ${listLabel}? You'll have a few seconds to undo before ${count === 1 ? 'it is' : 'they are'} actually removed.`,
+  });
+  if (!ok) return;
+
+  const promptsToDelete = architectPromptsState.items.filter((p) => ids.includes(p.id));
+  showUndoableDelete({
+    itemName: count === 1 ? names[0] : `${count} prompts`,
+    remove: () => {
+      architectPromptsState.items = architectPromptsState.items.filter((p) => !ids.includes(p.id));
+      architectPromptsState.total = Math.max(0, architectPromptsState.total - ids.length);
+      ids.forEach((id) => selectedPromptIds.delete(id));
+      renderArchitectPrompts();
+    },
+    restore: () => {
+      promptsToDelete.forEach((p) => architectPromptsState.items.unshift(p));
+      architectPromptsState.total += promptsToDelete.length;
+      ids.forEach((id) => selectedPromptIds.add(id));
+      renderArchitectPrompts();
+    },
+    commit: async () => {
+      const results = await Promise.allSettled(ids.map((id) => architectApi('DELETE', `/prompts/${encodeURIComponent(id)}`)));
+      const failed = results.filter((r) => r.status === 'rejected');
+      if (failed.length) throw new Error(`${failed.length} of ${count} could not be deleted`);
+    },
+  });
 });
 
 document.getElementById('architectPromptAddBtn').addEventListener('click', async () => {
