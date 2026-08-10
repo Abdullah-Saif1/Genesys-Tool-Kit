@@ -2870,7 +2870,11 @@ document.getElementById('architectPromptAddBtn').addEventListener('click', async
 // deprecated and returns org routing languages instead) — this is the standard set of locale
 // codes Architect prompts accept, curated from Genesys Cloud's own language picker.
 const PROMPT_LANGUAGES = [
-  ['ar-il', 'Arabic (Israel)'],
+  ['ar-ae', 'Arabic (United Arab Emirates)'],
+  ['ar-bh', 'Arabic (Bahrain)'],
+  ['ar-eg', 'Arabic (Egypt)'],
+  ['ar-sa', 'Arabic (Saudi Arabia)'],
+  ['ar-tn', 'Arabic (Tunisia)'],
   ['ca-es', 'Catalan (Spain)'],
   ['cs-cz', 'Czech (Czech Republic)'],
   ['cy-gb', 'Welsh (UK)'],
