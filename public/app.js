@@ -2515,9 +2515,12 @@ function architectQueryString(query) {
   return str ? `?${str}` : '';
 }
 
-function architectListRow({ title, sub, onDelete, extraActions, checkbox }) {
+function architectListRow({ title, sub, badges, onDelete, extraActions, checkbox }) {
   const mainChildren = [el('div', { class: 'list-row-title', text: title })];
   if (sub) mainChildren.push(el('div', { class: 'list-row-sub', text: sub }));
+  if (badges && badges.length) {
+    mainChildren.push(el('div', { class: 'prompt-lang-badges' }, badges.map((b) => el('span', { class: 'prompt-lang-badge', text: b }))));
+  }
   const actions = el('div', { class: 'list-row-actions' });
   (extraActions || []).forEach(({ label, onclick }) => actions.appendChild(el('button', { class: 'btn btn-subtle', text: label, onclick })));
   if (onDelete) actions.appendChild(el('button', { class: 'btn btn-subtle', text: 'Delete', onclick: onDelete }));
@@ -2695,6 +2698,7 @@ document.getElementById('architectFlowsDeleteSelectedBtn').addEventListener('cli
 const architectPromptsState = { items: [], pageNumber: 0, total: 0 };
 
 const selectedPromptIds = new Set();
+const selectedPromptLanguageFilters = new Set();
 let architectPromptsVisibleIds = [];
 
 function getSelectedPromptIds() {
@@ -2719,16 +2723,23 @@ function renderArchitectPromptsBulkBar() {
 function renderArchitectPrompts() {
   const container = document.getElementById('architectPromptsList');
   container.innerHTML = '';
-  architectPromptsVisibleIds = architectPromptsState.items.map((p) => p.id);
-  architectPromptsState.items.forEach((prompt) => {
-    const langCount = Array.isArray(prompt.resources) ? prompt.resources.length : null;
-    const sub = [prompt.description, langCount !== null ? `${langCount} language${langCount === 1 ? '' : 's'}` : null]
-      .filter(Boolean)
-      .join(' · ');
+
+  // Language filter runs client-side over whatever's already loaded (resources come bundled with
+  // the list fetch via includeResources=true) — a prompt matches if it has ANY selected language.
+  const activeLangs = selectedPromptLanguageFilters;
+  const filtered = architectPromptsState.items.filter((prompt) => {
+    if (!activeLangs.size) return true;
+    return (prompt.resources || []).some((r) => activeLangs.has(r.language));
+  });
+  architectPromptsVisibleIds = filtered.map((p) => p.id);
+
+  filtered.forEach((prompt) => {
+    const langCodes = (prompt.resources || []).map((r) => PROMPT_LANGUAGE_LABELS[r.language] || r.language);
     container.appendChild(
       architectListRow({
         title: prompt.name,
-        sub,
+        sub: prompt.description || '',
+        badges: langCodes,
         checkbox: { checked: selectedPromptIds.has(prompt.id), onChange: (checked) => togglePromptSelection(prompt.id, checked) },
         extraActions: [
           { label: 'Languages', onclick: () => openPromptLanguagesModal(prompt) },
@@ -2738,14 +2749,15 @@ function renderArchitectPrompts() {
       })
     );
   });
-  document.getElementById('architectPromptsEmpty').classList.toggle('hidden', architectPromptsState.items.length > 0);
+  document.getElementById('architectPromptsEmpty').classList.toggle('hidden', filtered.length > 0);
   document.getElementById('architectPromptsLoadMoreBtn').classList.toggle('hidden', architectPromptsState.items.length >= architectPromptsState.total);
   renderArchitectPromptsBulkBar();
 }
 
 async function fetchArchitectPromptsPage(pageNumber) {
-  const language = document.getElementById('architectPromptsLanguageFilter').value;
-  const data = await architectApi('GET', `/prompts${architectQueryString({ pageNumber, pageSize: 25, language })}`);
+  // includeResources so the list can show each prompt's languages and filter by them client-side
+  // without a extra round trip per prompt.
+  const data = await architectApi('GET', `/prompts${architectQueryString({ pageNumber, pageSize: 25, includeResources: true })}`);
   architectPromptsState.total = data.total || 0;
   architectPromptsState.pageNumber = data.pageNumber || pageNumber;
   architectPromptsState.items = architectPromptsState.items.concat(data.entities || []);
@@ -2925,13 +2937,49 @@ const PROMPT_LANGUAGES = [
 ];
 const PROMPT_LANGUAGE_LABELS = Object.fromEntries(PROMPT_LANGUAGES);
 
-// Genesys filters prompts server-side by language (a prompt matches if it has a resource in that
-// language), so this reuses the /prompts?language= query param rather than filtering client-side.
-PROMPT_LANGUAGES.forEach(([code, label]) => {
-  document.getElementById('architectPromptsLanguageFilter').appendChild(el('option', { value: code, text: label }));
+// Language filter is a set of toggle chips (multi-select) rather than a native <select multiple> —
+// no modifier-key discovery problem, and it runs client-side over already-loaded prompts (their
+// resources come bundled in via includeResources=true) rather than round-tripping per change.
+function renderPromptLanguageChips() {
+  const container = document.getElementById('architectPromptsLanguageChips');
+  container.innerHTML = '';
+  PROMPT_LANGUAGES.forEach(([code, label]) => {
+    const chip = el('button', {
+      type: 'button',
+      class: `lang-chip${selectedPromptLanguageFilters.has(code) ? ' active' : ''}`,
+      text: label,
+    });
+    chip.addEventListener('click', () => {
+      if (selectedPromptLanguageFilters.has(code)) selectedPromptLanguageFilters.delete(code);
+      else selectedPromptLanguageFilters.add(code);
+      renderPromptLanguageChips();
+      updatePromptLanguageFilterToggleLabel();
+      renderArchitectPrompts();
+    });
+    container.appendChild(chip);
+  });
+}
+
+function updatePromptLanguageFilterToggleLabel() {
+  const count = selectedPromptLanguageFilters.size;
+  document.getElementById('architectPromptsLanguageFilterToggle').textContent = count ? `Filter by language (${count})` : 'Filter by language';
+  document.getElementById('architectPromptsLanguageFilterClearBtn').classList.toggle('hidden', count === 0);
+}
+
+renderPromptLanguageChips();
+
+document.getElementById('architectPromptsLanguageFilterToggle').addEventListener('click', () => {
+  const chips = document.getElementById('architectPromptsLanguageChips');
+  const hint = document.getElementById('architectPromptsLanguageFilterHint');
+  const nowHidden = chips.classList.toggle('hidden');
+  hint.classList.toggle('hidden', nowHidden);
 });
-document.getElementById('architectPromptsLanguageFilter').addEventListener('change', () => {
-  resetArchitectPrompts().catch((err) => showError('architectPromptsError', err.message));
+
+document.getElementById('architectPromptsLanguageFilterClearBtn').addEventListener('click', () => {
+  selectedPromptLanguageFilters.clear();
+  renderPromptLanguageChips();
+  updatePromptLanguageFilterToggleLabel();
+  renderArchitectPrompts();
 });
 
 function downloadJson(filename, data) {
