@@ -450,6 +450,7 @@ module.exports = function createArchitectRouter({ getValidToken, saveSession, RE
           pageNumber: req.query.pageNumber || 1,
           name: req.query.name,
           includeResources: req.query.includeResources,
+          language: req.query.language,
         },
       });
       res.json(data);

@@ -2744,7 +2744,8 @@ function renderArchitectPrompts() {
 }
 
 async function fetchArchitectPromptsPage(pageNumber) {
-  const data = await architectApi('GET', `/prompts${architectQueryString({ pageNumber, pageSize: 25 })}`);
+  const language = document.getElementById('architectPromptsLanguageFilter').value;
+  const data = await architectApi('GET', `/prompts${architectQueryString({ pageNumber, pageSize: 25, language })}`);
   architectPromptsState.total = data.total || 0;
   architectPromptsState.pageNumber = data.pageNumber || pageNumber;
   architectPromptsState.items = architectPromptsState.items.concat(data.entities || []);
@@ -2919,6 +2920,15 @@ const PROMPT_LANGUAGES = [
   ['zh-tw', 'Chinese, Traditional (Taiwan)'],
 ];
 const PROMPT_LANGUAGE_LABELS = Object.fromEntries(PROMPT_LANGUAGES);
+
+// Genesys filters prompts server-side by language (a prompt matches if it has a resource in that
+// language), so this reuses the /prompts?language= query param rather than filtering client-side.
+PROMPT_LANGUAGES.forEach(([code, label]) => {
+  document.getElementById('architectPromptsLanguageFilter').appendChild(el('option', { value: code, text: label }));
+});
+document.getElementById('architectPromptsLanguageFilter').addEventListener('change', () => {
+  resetArchitectPrompts().catch((err) => showError('architectPromptsError', err.message));
+});
 
 function downloadJson(filename, data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
