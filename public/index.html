@@ -565,23 +565,47 @@
 
     <!-- ===== Queue Service Level (SLA) bulk-edit modal ===== -->
     <div id="queueSlaModalOverlay" class="modal-overlay hidden">
-      <div class="modal-card wide">
+      <div class="modal-card xwide">
         <div class="modal-head">
           <div class="title" id="queueSlaModalTitle">Service Level (SLA)</div>
           <div class="sub" id="queueSlaModalSub"></div>
         </div>
         <div class="modal-body">
-          <p class="sub" style="font-size:12px;color:var(--text-faint)">
-            Check a media type to change its target — unchecked types are left exactly as they are. Only media
-            types already configured on the selected queue(s) are shown.
-          </p>
-          <div id="queueSlaModalBody"></div>
+          <div id="queueSlaEditView">
+            <p class="sub" style="font-size:12px;color:var(--text-faint)">
+              Check a media type to change its Target %, Within window, and (optionally) Alerting timeout.
+              Unchecked types are left exactly as they are. Media types a queue doesn't have yet are skipped
+              unless you turn on "Also add to queues that don't have it yet" for that row.
+            </p>
+
+            <div class="sla-presets-row">
+              <select id="queueSlaPresetSelect" class="text-input">
+                <option value="">Load a preset…</option>
+              </select>
+              <button id="queueSlaPresetApplyBtn" class="btn btn-subtle" type="button">Apply preset</button>
+              <button id="queueSlaPresetDeleteBtn" class="btn btn-subtle" type="button">Delete preset</button>
+              <span class="sla-presets-sep"></span>
+              <input type="text" id="queueSlaPresetNameInput" class="text-input" placeholder="Preset name…" style="flex:1;min-width:120px" />
+              <button id="queueSlaPresetSaveBtn" class="btn btn-subtle" type="button">Save checked rows as preset</button>
+            </div>
+            <p id="queueSlaPresetError" class="field-inline-error hidden"></p>
+
+            <div id="queueSlaModalBody"></div>
+          </div>
+
+          <div id="queueSlaReviewView" class="hidden">
+            <p class="sub" style="font-size:12px;color:var(--text-faint)">Review the changes below, then confirm to apply them.</p>
+            <div id="queueSlaReviewBody" class="sla-review-table-wrap"></div>
+          </div>
+
           <div id="queueSlaResults" class="bulk-results"></div>
         </div>
         <div class="modal-foot">
           <span class="field-inline-error hidden" id="queueSlaModalError" style="margin-right:auto"></span>
           <button id="queueSlaCancelBtn" class="btn btn-outline">Cancel</button>
-          <button id="queueSlaApplyBtn" class="btn btn-accent">Apply</button>
+          <button id="queueSlaBackBtn" class="btn btn-outline hidden">&larr; Back</button>
+          <button id="queueSlaApplyBtn" class="btn btn-accent">Review changes</button>
+          <button id="queueSlaConfirmBtn" class="btn btn-accent hidden">Confirm &amp; apply</button>
         </div>
       </div>
     </div>
