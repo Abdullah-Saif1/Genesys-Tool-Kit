@@ -3438,7 +3438,11 @@ const evalFormsResource = createListResource({
   emptyId: 'evalFormsEmpty',
   errorId: 'evalFormsError',
   buildRow: (form) => {
-    const groupCount = (form.questionGroups || []).length;
+    // Genesys's list endpoint returns form summaries without `questionGroups` — only the
+    // single-form GET (used by Edit/Export above) includes it. Showing "0" here would read as
+    // "this form has no questions" when it's really just "the list didn't tell us"; show a
+    // neutral placeholder instead and only print a count when we actually have one.
+    const groupCount = Array.isArray(form.questionGroups) ? String(form.questionGroups.length) : '—';
 
     const editBtn = el('span', { class: 'row-edit', text: 'Edit' });
     editBtn.addEventListener('click', async () => {
@@ -3481,7 +3485,7 @@ const evalFormsResource = createListResource({
     return gridRow('1.6fr .8fr .8fr auto', [
       cellText(form.name, 'name'),
       cellText(form.published ? 'Published' : 'Draft', 'muted'),
-      cellText(String(groupCount), 'muted'),
+      cellText(groupCount, 'muted'),
       el('div', { class: 'row-actions' }, [editBtn, exportBtn, del]),
     ]);
   },
