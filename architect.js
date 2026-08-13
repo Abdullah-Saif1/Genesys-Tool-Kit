@@ -239,6 +239,68 @@ const GENERATION_SCHEMAS = {
 };
 
 // ---------------------------------------------------------------------------
+// Evaluation form generation — turns a plain-text description of QA criteria into a structured
+// Genesys Cloud EvaluationForm question-group tree (multipleChoiceQuestion only; the builder UI
+// lets the reviewer add other question types/fields by hand afterwards).
+// ---------------------------------------------------------------------------
+
+const EVAL_FORM_GENERATION_SCHEMA = {
+  systemPrompt:
+    'You design a Genesys Cloud contact-center QA evaluation form from a free-text description of what should be evaluated. ' +
+    'Group related criteria into question groups with short names (e.g. "Greeting", "Compliance", "Resolution"). ' +
+    'Each question is scored via multiple-choice answer options; give every question 2-5 answer options ordered worst-to-best, ' +
+    'each with a short label and an integer value (0 for the worst option, increasing for better options — a typical scale is ' +
+    '0/1 for Yes/No or 0-3/0-5 for graded scales). Mark a question isCritical only if failing it should flag the whole ' +
+    'evaluation as needing review, and isKill only if it should automatically fail (zero) the entire form — leave both false ' +
+    'unless the description clearly implies it.',
+  schema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Short, descriptive name for the evaluation form' },
+      questionGroups: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            questions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  text: { type: 'string', description: 'The question text shown to the evaluator' },
+                  helpText: { type: 'string', description: 'Short clarifying guidance for the evaluator. Empty string if none needed.' },
+                  isCritical: { type: 'boolean' },
+                  isKill: { type: 'boolean' },
+                  answerOptions: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        text: { type: 'string' },
+                        value: { type: 'integer' },
+                      },
+                      required: ['text', 'value'],
+                      additionalProperties: false,
+                    },
+                  },
+                },
+                required: ['text', 'helpText', 'isCritical', 'isKill', 'answerOptions'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ['name', 'questions'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['name', 'questionGroups'],
+    additionalProperties: false,
+  },
+};
+
+// ---------------------------------------------------------------------------
 // AI providers — the flow-generation step can run on any of these; the user
 // brings their own key for whichever one they pick.
 // ---------------------------------------------------------------------------
@@ -657,6 +719,35 @@ module.exports = function createArchitectRouter({ getValidToken, saveSession, RE
       });
 
       res.json({ flowType, params });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ---- Generate an evaluation form's question groups from free-text criteria ----
+
+  router.post('/generate-eval-form', requireGenesysAuth, async (req, res) => {
+    try {
+      const { criteria } = req.body || {};
+      if (!criteria || typeof criteria !== 'string' || !criteria.trim()) {
+        return res.status(400).json({ error: 'criteria is required' });
+      }
+
+      const resolved = resolveProviderConfig(req);
+      if (!resolved) {
+        return res.status(400).json({ error: 'No AI API key configured. Add one under Architect settings first.' });
+      }
+
+      const form = await extractParams({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model: resolved.model,
+        systemPrompt: EVAL_FORM_GENERATION_SCHEMA.systemPrompt,
+        schema: EVAL_FORM_GENERATION_SCHEMA.schema,
+        userPrompt: criteria,
+      });
+
+      res.json({ form });
     } catch (err) {
       sendError(res, err);
     }

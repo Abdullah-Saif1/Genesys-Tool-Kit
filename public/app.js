@@ -443,6 +443,7 @@ const tabLoaders = {
   skills: () => skillsResource.reset(),
   architect: loadArchitectTab,
   schedules: () => schedulesResource.reset(),
+  evalforms: () => evalFormsResource.reset(),
   audit: loadAuditTab,
   explorer: () => {},
 };
@@ -455,6 +456,7 @@ const tabMeta = {
   skills: { title: 'Skills & Routing', sub: 'ACD skills used for skills-based routing', create: 'New skill', bulk: false },
   architect: { title: 'Architect', sub: 'Flows & prompts, and AI-assisted flow generation', create: null, bulk: false },
   schedules: { title: 'Schedules', sub: 'Time periods used by schedule groups and Architect flows', create: 'New schedule', bulk: false },
+  evalforms: { title: 'Evaluation Forms', sub: 'QA scorecards used to evaluate recorded interactions', create: null, bulk: false },
   audit: { title: 'Audit Log', sub: 'Who changed what, and when', create: null, bulk: false },
   explorer: { title: 'API Explorer', sub: 'Direct access to any Genesys Cloud API v2 endpoint', create: null, bulk: false },
 };
@@ -610,7 +612,8 @@ async function checkStatus() {
 function paletteActions() {
   const nav = [
     ['canned', 'Canned Responses'], ['wrapup', 'Wrap-up Codes'], ['queues', 'Queues'],
-    ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['schedules', 'Schedules'], ['explorer', 'API Explorer'],
+    ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['schedules', 'Schedules'],
+    ['evalforms', 'Evaluation Forms'], ['explorer', 'API Explorer'],
   ];
   const items = nav.map(([k, l]) => ({ label: `Go to ${l}`, tag: 'Navigate', icon: '→', iconBg: '#4b5b68', run: () => setActiveTab(k) }));
   items.unshift(
@@ -619,7 +622,8 @@ function paletteActions() {
     { label: 'New skill', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('skills'); openCreateModal('skill'); } },
     { label: 'New queue', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('queues'); openCreateModal('queue'); } },
     { label: 'New schedule', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('schedules'); openCreateModal('schedule'); } },
-    { label: 'New division', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('users'); openCreateModal('division'); } }
+    { label: 'New division', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('users'); openCreateModal('division'); } },
+    { label: 'New evaluation form', tag: 'Action', icon: '+', iconBg: '#e8551e', run: () => { setActiveTab('evalforms'); openEvalFormBuilder(); } }
   );
   items.push({ label: 'Log out', tag: 'Session', icon: '↩', iconBg: '#8a949c', run: () => document.getElementById('logoutBtn').click() });
   return items;
@@ -653,6 +657,7 @@ function closeOverlays() {
   document.getElementById('pickModalOverlay').classList.add('hidden');
   document.getElementById('userModalOverlay').classList.add('hidden');
   document.getElementById('promptModalOverlay').classList.add('hidden');
+  document.getElementById('evalFormModalOverlay').classList.add('hidden');
 }
 
 document.getElementById('paletteInput').addEventListener('input', renderPalette);
@@ -3417,6 +3422,497 @@ async function loadArchitectTab() {
   await refreshArchitectKeyStatus();
   await Promise.all([resetArchitectFlows(), resetArchitectPrompts()]);
 }
+
+// ---- Evaluation Forms ----------------------------------------------------
+// Genesys Cloud Quality Management "evaluation form" = a scorecard of question groups, each
+// holding multiple-choice questions with weighted answer options. Editing always re-fetches the
+// full form by id first (never trusts the list row's own fields) so a stale/summary list response
+// can never silently wipe a form's questions on save.
+
+const evalFormsResource = createListResource({
+  path: '/api/v2/quality/forms/evaluations',
+  pageSize: 50,
+  containerId: 'evalFormsTableBody',
+  filterId: 'evalFormsFilter',
+  loadMoreId: 'evalFormsLoadMoreBtn',
+  emptyId: 'evalFormsEmpty',
+  errorId: 'evalFormsError',
+  buildRow: (form) => {
+    const groupCount = (form.questionGroups || []).length;
+
+    const editBtn = el('span', { class: 'row-edit', text: 'Edit' });
+    editBtn.addEventListener('click', async () => {
+      try {
+        const full = await withBusy(editBtn, 'Loading…', () => proxy('GET', `/api/v2/quality/forms/evaluations/${form.id}`));
+        openEvalFormBuilder(full);
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+
+    const exportBtn = el('span', { class: 'row-edit', text: 'Export' });
+    exportBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const full = await proxy('GET', `/api/v2/quality/forms/evaluations/${form.id}`);
+        downloadJson(`eval-form-${(full.name || 'form').replace(/[^a-z0-9-]+/gi, '_')}.json`, evalFormExportShape(full));
+        showToast(`Exported "${full.name}".`);
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+
+    const del = el('span', { class: 'row-delete', text: 'Delete' });
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ok = await confirmModal({
+        title: 'Delete evaluation form',
+        message: `Delete "${form.name}"? You'll have a few seconds to undo before it's actually removed.`,
+      });
+      if (!ok) return;
+      showUndoableDelete({
+        itemName: form.name,
+        remove: () => evalFormsResource.remove(form.id),
+        restore: () => evalFormsResource.prepend(form),
+        commit: () => proxy('DELETE', `/api/v2/quality/forms/evaluations/${form.id}`),
+      });
+    });
+
+    return gridRow('1.6fr .8fr .8fr auto', [
+      cellText(form.name, 'name'),
+      cellText(form.published ? 'Published' : 'Draft', 'muted'),
+      cellText(String(groupCount), 'muted'),
+      el('div', { class: 'row-actions' }, [editBtn, exportBtn, del]),
+    ]);
+  },
+});
+
+function evalFormExportShape(form) {
+  return {
+    name: form.name,
+    published: !!form.published,
+    questionGroups: (form.questionGroups || []).map((g) => ({
+      name: g.name || '',
+      weight: g.weight != null ? g.weight : 1,
+      naEnabled: !!g.naEnabled,
+      questions: (g.questions || []).map((q) => ({
+        text: q.text || '',
+        helpText: q.helpText || '',
+        naEnabled: !!q.naEnabled,
+        commentsRequired: !!q.commentsRequired,
+        isCritical: !!q.isCritical,
+        isKill: !!q.isKill,
+        answerOptions: (q.answerOptions || []).map((a) => ({ text: a.text || '', value: a.value != null ? a.value : 0 })),
+      })),
+    })),
+  };
+}
+
+function newEvalQuestion() {
+  return {
+    text: '',
+    helpText: '',
+    naEnabled: false,
+    commentsRequired: false,
+    isCritical: false,
+    isKill: false,
+    answerOptions: [
+      { text: 'No', value: 0 },
+      { text: 'Yes', value: 1 },
+    ],
+  };
+}
+
+function newEvalGroup() {
+  return { name: '', weight: 1, naEnabled: false, questions: [newEvalQuestion()] };
+}
+
+// Normalizes a Genesys EvaluationForm (or an imported/generated plain object with the same shape)
+// into fresh builder-owned objects — never keeps a reference into data owned by evalFormsResource.
+function normalizeEvalFormForBuilder(source) {
+  return {
+    id: (source && source.id) || null,
+    name: (source && source.name) || '',
+    published: !!(source && source.published),
+    questionGroups: ((source && source.questionGroups) || []).map((g) => ({
+      name: g.name || '',
+      weight: g.weight != null ? g.weight : 1,
+      naEnabled: !!g.naEnabled,
+      questions: (g.questions || []).map((q) => ({
+        text: q.text || '',
+        helpText: q.helpText || '',
+        naEnabled: !!q.naEnabled,
+        commentsRequired: !!q.commentsRequired,
+        isCritical: !!q.isCritical,
+        isKill: !!q.isKill,
+        answerOptions: (q.answerOptions && q.answerOptions.length ? q.answerOptions : [{ text: 'No', value: 0 }, { text: 'Yes', value: 1 }]).map((a) => ({
+          text: a.text || '',
+          value: a.value != null ? a.value : 0,
+        })),
+      })),
+    })),
+  };
+}
+
+function evalFormSavePayload(state) {
+  return {
+    name: state.name.trim(),
+    published: state.published,
+    questionGroups: state.questionGroups.map((g) => ({
+      name: g.name.trim(),
+      weight: g.weight,
+      naEnabled: g.naEnabled,
+      questions: g.questions.map((q) => ({
+        text: q.text.trim(),
+        helpText: q.helpText || '',
+        type: 'multipleChoiceQuestion',
+        naEnabled: q.naEnabled,
+        commentsRequired: q.commentsRequired,
+        isCritical: q.isCritical,
+        isKill: q.isKill,
+        answerOptions: q.answerOptions.map((a) => ({ text: a.text.trim(), value: a.value })),
+      })),
+    })),
+  };
+}
+
+function validateEvalForm(state) {
+  if (!state.name.trim()) return 'Form name is required.';
+  if (!state.questionGroups.length) return 'Add at least one question group.';
+  for (const g of state.questionGroups) {
+    if (!g.name.trim()) return 'Every question group needs a name.';
+    if (!g.questions.length) return `Group "${g.name}" needs at least one question.`;
+    for (const q of g.questions) {
+      if (!q.text.trim()) return `Every question in "${g.name}" needs text.`;
+      if (!q.answerOptions.length || q.answerOptions.some((a) => !a.text.trim())) {
+        return `Question "${q.text || '(untitled)'}" needs at least one labeled answer option.`;
+      }
+    }
+  }
+  return null;
+}
+
+let evalFormBuilderState = null;
+
+function openEvalFormBuilder(existingForm) {
+  evalFormBuilderState = normalizeEvalFormForBuilder(existingForm);
+  document.getElementById('evalFormModalTitle').textContent = existingForm ? `Edit "${existingForm.name}"` : 'New evaluation form';
+  document.getElementById('evalFormModalError').classList.add('hidden');
+  renderEvalFormModal();
+  document.getElementById('evalFormModalOverlay').classList.remove('hidden');
+}
+
+function renderEvalFormModal() {
+  const body = document.getElementById('evalFormModalBody');
+  body.innerHTML = '';
+
+  body.appendChild(el('div', { class: 'field-label', text: 'Name' }));
+  const nameInput = el('input', { type: 'text', class: 'text-input', placeholder: 'Form name', style: 'margin-bottom:10px' });
+  nameInput.value = evalFormBuilderState.name;
+  nameInput.addEventListener('input', () => {
+    evalFormBuilderState.name = nameInput.value;
+  });
+  body.appendChild(nameInput);
+
+  const publishedLabel = el('label', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:18px;font-size:12.5px;cursor:pointer' });
+  const publishedCheckbox = el('input', { type: 'checkbox' });
+  publishedCheckbox.checked = evalFormBuilderState.published;
+  publishedCheckbox.addEventListener('change', () => {
+    evalFormBuilderState.published = publishedCheckbox.checked;
+  });
+  publishedLabel.appendChild(publishedCheckbox);
+  publishedLabel.appendChild(document.createTextNode('Published (evaluators can use it immediately; otherwise it stays a draft)'));
+  body.appendChild(publishedLabel);
+
+  // -- AI generate from criteria --
+  const genCard = el('div', { class: 'card card-pad', style: 'margin-bottom:18px' });
+  genCard.appendChild(el('div', { class: 'field-label', text: 'Generate from criteria (optional)' }));
+  const criteriaInput = el('textarea', {
+    class: 'text-input',
+    rows: '3',
+    style: 'margin-bottom:10px',
+    placeholder:
+      'e.g. Evaluate the greeting, active listening, whether the issue was resolved, and whether the required compliance disclosure was read.',
+  });
+  const genBtn = el('button', { class: 'btn btn-accent', text: 'Generate' });
+  const genError = el('p', { class: 'field-inline-error hidden', style: 'margin-top:8px' });
+  genBtn.addEventListener('click', async () => {
+    genError.classList.add('hidden');
+    const criteria = criteriaInput.value.trim();
+    if (!criteria) {
+      genError.textContent = 'Describe what should be evaluated first.';
+      genError.classList.remove('hidden');
+      return;
+    }
+    if (evalFormBuilderState.questionGroups.length) {
+      const ok = await confirmModal({
+        title: 'Replace existing questions?',
+        message: 'This form already has question groups — generating from criteria replaces all of them. Continue?',
+        confirmLabel: 'Replace',
+        danger: false,
+      });
+      if (!ok) return;
+    }
+    try {
+      await withBusy(genBtn, 'Generating…', async () => {
+        const data = await architectApi('POST', '/generate-eval-form', { criteria });
+        if (!evalFormBuilderState.name.trim() && data.form.name) {
+          evalFormBuilderState.name = data.form.name;
+          nameInput.value = data.form.name;
+        }
+        evalFormBuilderState.questionGroups = normalizeEvalFormForBuilder(data.form).questionGroups;
+        renderEvalFormGroups();
+        showToast(`Generated ${evalFormBuilderState.questionGroups.length} question group(s) — review before saving.`);
+      });
+    } catch (err) {
+      genError.textContent = err.message;
+      genError.classList.remove('hidden');
+    }
+  });
+  genCard.appendChild(criteriaInput);
+  genCard.appendChild(genBtn);
+  genCard.appendChild(genError);
+  body.appendChild(genCard);
+
+  // -- question groups --
+  body.appendChild(el('div', { class: 'field-label', text: 'Question groups' }));
+  body.appendChild(el('div', { id: 'evalFormGroupsContainer' }));
+
+  const addGroupBtn = el('button', { class: 'btn btn-subtle', text: '+ Add group', style: 'margin-top:6px' });
+  addGroupBtn.addEventListener('click', () => {
+    evalFormBuilderState.questionGroups.push(newEvalGroup());
+    renderEvalFormGroups();
+  });
+  body.appendChild(addGroupBtn);
+
+  renderEvalFormGroups();
+}
+
+// Rebuilds only the groups subtree — called after structural edits (add/remove group, question,
+// or answer option) so text-field edits elsewhere in the modal never lose focus/cursor position.
+function renderEvalFormGroups() {
+  const container = document.getElementById('evalFormGroupsContainer');
+  if (!container) return;
+  container.innerHTML = '';
+  evalFormBuilderState.questionGroups.forEach((group, gi) => {
+    container.appendChild(buildEvalGroupCard(group, gi));
+  });
+}
+
+function buildEvalGroupCard(group, gi) {
+  const card = el('div', { class: 'eval-group-card' });
+
+  const head = el('div', { class: 'eval-group-head' });
+  const nameInput = el('input', { type: 'text', placeholder: `Group ${gi + 1} name` });
+  nameInput.value = group.name;
+  nameInput.addEventListener('input', () => {
+    group.name = nameInput.value;
+  });
+  const weightWrap = el('label', { style: 'display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-faint);flex:none' });
+  weightWrap.appendChild(document.createTextNode('Weight'));
+  const weightInput = el('input', { type: 'number', step: '0.1', min: '0' });
+  weightInput.value = group.weight;
+  weightInput.addEventListener('input', () => {
+    group.weight = parseFloat(weightInput.value) || 0;
+  });
+  weightWrap.appendChild(weightInput);
+  const removeGroupBtn = el('button', { class: 'btn btn-subtle', text: 'Remove group' });
+  removeGroupBtn.addEventListener('click', () => {
+    evalFormBuilderState.questionGroups.splice(gi, 1);
+    renderEvalFormGroups();
+  });
+  head.appendChild(nameInput);
+  head.appendChild(weightWrap);
+  head.appendChild(removeGroupBtn);
+  card.appendChild(head);
+
+  group.questions.forEach((question, qi) => {
+    card.appendChild(buildEvalQuestionCard(group, question, qi));
+  });
+
+  const addQBtn = el('button', { class: 'btn btn-subtle', text: '+ Add question' });
+  addQBtn.addEventListener('click', () => {
+    group.questions.push(newEvalQuestion());
+    renderEvalFormGroups();
+  });
+  card.appendChild(addQBtn);
+
+  return card;
+}
+
+function buildEvalQuestionCard(group, question, qi) {
+  const card = el('div', { class: 'eval-question-card' });
+
+  const head = el('div', { class: 'eval-question-head' });
+  const textArea = el('textarea', { rows: '2', class: 'text-input', placeholder: `Question ${qi + 1} text` });
+  textArea.value = question.text;
+  textArea.addEventListener('input', () => {
+    question.text = textArea.value;
+  });
+  const removeQBtn = el('button', { class: 'btn btn-subtle', text: 'Remove' });
+  removeQBtn.addEventListener('click', () => {
+    group.questions.splice(qi, 1);
+    renderEvalFormGroups();
+  });
+  head.appendChild(textArea);
+  head.appendChild(removeQBtn);
+  card.appendChild(head);
+
+  const helpInput = el('input', { type: 'text', class: 'text-input', placeholder: 'Help text for evaluators (optional)', style: 'margin-bottom:2px' });
+  helpInput.value = question.helpText;
+  helpInput.addEventListener('input', () => {
+    question.helpText = helpInput.value;
+  });
+  card.appendChild(helpInput);
+
+  const flags = el('div', { class: 'eval-question-flags' });
+  [
+    ['naEnabled', 'N/A allowed'],
+    ['commentsRequired', 'Comment required'],
+    ['isCritical', 'Critical'],
+    ['isKill', 'Auto-fail (kill question)'],
+  ].forEach(([key, flagLabel]) => {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = !!question[key];
+    cb.addEventListener('change', () => {
+      question[key] = cb.checked;
+    });
+    const lbl = el('label', {}, [cb, document.createTextNode(flagLabel)]);
+    flags.appendChild(lbl);
+  });
+  card.appendChild(flags);
+
+  card.appendChild(el('div', { class: 'field-label', style: 'font-size:10.5px;margin:2px 0 4px', text: 'Answer options (worst → best)' }));
+  question.answerOptions.forEach((option, oi) => {
+    const row = el('div', { class: 'eval-answer-row' });
+    const optText = el('input', { type: 'text', placeholder: 'Label' });
+    optText.value = option.text;
+    optText.addEventListener('input', () => {
+      option.text = optText.value;
+    });
+    const optValue = el('input', { type: 'number' });
+    optValue.value = option.value;
+    optValue.addEventListener('input', () => {
+      option.value = parseInt(optValue.value, 10) || 0;
+    });
+    const removeOptBtn = el('button', { class: 'btn btn-subtle', text: '×' });
+    removeOptBtn.addEventListener('click', () => {
+      question.answerOptions.splice(oi, 1);
+      renderEvalFormGroups();
+    });
+    row.appendChild(optText);
+    row.appendChild(optValue);
+    row.appendChild(removeOptBtn);
+    card.appendChild(row);
+  });
+  const addOptBtn = el('button', { class: 'btn btn-subtle', text: '+ Add option', style: 'margin-top:2px' });
+  addOptBtn.addEventListener('click', () => {
+    question.answerOptions.push({ text: '', value: 0 });
+    renderEvalFormGroups();
+  });
+  card.appendChild(addOptBtn);
+
+  return card;
+}
+
+document.getElementById('evalFormNewBtn').addEventListener('click', () => openEvalFormBuilder());
+
+document.getElementById('evalFormModalCancelBtn').addEventListener('click', () => {
+  document.getElementById('evalFormModalOverlay').classList.add('hidden');
+});
+document.getElementById('evalFormModalOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'evalFormModalOverlay') document.getElementById('evalFormModalOverlay').classList.add('hidden');
+});
+
+document.getElementById('evalFormExportBtn').addEventListener('click', () => {
+  if (!evalFormBuilderState) return;
+  const fname = (evalFormBuilderState.name || 'draft').replace(/[^a-z0-9-]+/gi, '_') || 'draft';
+  downloadJson(`eval-form-${fname}.json`, evalFormSavePayload(evalFormBuilderState));
+});
+
+document.getElementById('evalFormModalSaveBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('evalFormModalError');
+  errEl.classList.add('hidden');
+  const validationError = validateEvalForm(evalFormBuilderState);
+  if (validationError) {
+    errEl.textContent = validationError;
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  const btn = document.getElementById('evalFormModalSaveBtn');
+  const payload = evalFormSavePayload(evalFormBuilderState);
+  try {
+    await withBusy(btn, 'Saving…', async () => {
+      let saved;
+      if (evalFormBuilderState.id) {
+        saved = await proxy('PUT', `/api/v2/quality/forms/evaluations/${evalFormBuilderState.id}`, { body: payload });
+        evalFormsResource.remove(evalFormBuilderState.id);
+      } else {
+        saved = await proxy('POST', '/api/v2/quality/forms/evaluations', { body: payload });
+      }
+      evalFormsResource.prepend(saved);
+      document.getElementById('evalFormModalOverlay').classList.add('hidden');
+      showToast(`Saved "${saved.name}".`);
+    });
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
+// -- import (list-level: always creates new forms, never overwrites an existing one by name) --
+
+document.getElementById('evalFormImportBtn').addEventListener('click', () => {
+  document.getElementById('evalFormImportFile').click();
+});
+
+document.getElementById('evalFormImportFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+
+  const summaryEl = document.getElementById('evalFormsImportSummary');
+  summaryEl.classList.add('hidden');
+  showError('evalFormsError', '');
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (err) {
+    return showError('evalFormsError', `Not valid JSON: ${err.message}`);
+  }
+  const forms = Array.isArray(parsed) ? parsed : [parsed];
+  if (!forms.length) return showError('evalFormsError', 'File has no forms to import.');
+
+  const btn = document.getElementById('evalFormImportBtn');
+  await withBusy(btn, 'Importing…', async () => {
+    const results = [];
+    for (const item of forms) {
+      const name = item && item.name && String(item.name).trim();
+      if (!name) {
+        results.push({ ok: false, label: '(unnamed)', message: 'missing "name"' });
+        continue;
+      }
+      if (!Array.isArray(item.questionGroups) || !item.questionGroups.length) {
+        results.push({ ok: false, label: name, message: 'missing "questionGroups"' });
+        continue;
+      }
+      try {
+        const payload = evalFormSavePayload(normalizeEvalFormForBuilder(item));
+        const saved = await proxy('POST', '/api/v2/quality/forms/evaluations', { body: payload });
+        evalFormsResource.prepend(saved);
+        results.push({ ok: true, label: name });
+      } catch (err) {
+        results.push({ ok: false, label: name, message: err.message });
+      }
+    }
+    summaryEl.classList.remove('hidden');
+    renderBulkResults('evalFormsImportSummary', results);
+    const okCount = results.filter((r) => r.ok).length;
+    showToast(`Imported ${okCount} of ${results.length} form${results.length === 1 ? '' : 's'}.`, okCount < results.length);
+  });
+});
 
 // ---- Audit Log ---------------------------------------------------------
 

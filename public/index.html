@@ -104,6 +104,7 @@
           <div class="nav-item" data-tab="architect">Architect</div>
           <div class="nav-item" data-tab="schedules">Schedules</div>
           <div class="nav-group-title">Compliance</div>
+          <div class="nav-item" data-tab="evalforms">Evaluation Forms</div>
           <div class="nav-item" data-tab="audit">Audit Log</div>
           <div class="nav-group-title">Advanced</div>
           <div class="nav-item" data-tab="explorer">API Explorer</div>
@@ -388,6 +389,25 @@
             <button id="schedulesLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
           </section>
 
+          <!-- Evaluation Forms -->
+          <section id="tab-evalforms" class="tab-panel hidden">
+            <div class="notice-box" style="margin-bottom:14px">Build QA evaluation forms by hand, generate one from a plain-text description of your criteria, or import a previously-exported form. Uses the same AI key configured under <b>Architect &rarr; AI API key</b>.</div>
+            <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+              <button id="evalFormNewBtn" class="btn btn-accent">+ New form</button>
+              <input type="file" id="evalFormImportFile" accept="application/json" class="hidden" />
+              <button id="evalFormImportBtn" class="btn btn-subtle">&#8593; Import form</button>
+            </div>
+            <input type="search" id="evalFormsFilter" class="text-input" style="max-width:320px;padding:9px 12px;font-size:12.5px;margin-bottom:18px" placeholder="&#128269;  Filter by name&hellip;" />
+            <div class="grid-table" style="grid-template-columns:1.6fr .8fr .8fr auto">
+              <div class="grid-head" style="grid-template-columns:1.6fr .8fr .8fr auto">Name<span>Status</span><span>Groups</span><span></span></div>
+              <div id="evalFormsTableBody"></div>
+              <p id="evalFormsEmpty" class="empty-note hidden">No evaluation forms yet.</p>
+            </div>
+            <p id="evalFormsError" class="field-error hidden" style="margin-top:10px"></p>
+            <button id="evalFormsLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+            <p id="evalFormsImportSummary" class="usage-note hidden" style="margin-top:12px"></p>
+          </section>
+
           <!-- Audit Log -->
           <section id="tab-audit" class="tab-panel hidden">
             <div class="card card-pad" style="margin-bottom:18px">
@@ -520,6 +540,22 @@
         <div class="modal-foot">
           <button id="promptModalExportBtn" class="btn btn-subtle">&#8595; Export this prompt</button>
           <button id="promptModalCloseBtn" class="btn btn-outline">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Evaluation form builder modal ===== -->
+    <div id="evalFormModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card xwide">
+        <div class="modal-head">
+          <div class="title" id="evalFormModalTitle">New evaluation form</div>
+        </div>
+        <div class="modal-body" id="evalFormModalBody"></div>
+        <div class="modal-foot">
+          <button id="evalFormExportBtn" class="btn btn-subtle">&#8595; Export</button>
+          <span class="field-inline-error hidden" id="evalFormModalError" style="margin-right:auto"></span>
+          <button id="evalFormModalCancelBtn" class="btn btn-outline">Cancel</button>
+          <button id="evalFormModalSaveBtn" class="btn btn-accent">Save form</button>
         </div>
       </div>
     </div>

@@ -336,6 +336,7 @@ input, select, textarea, button { font-family: inherit; }
   display: flex; flex-direction: column; max-height: 80vh;
 }
 .modal-card.wide { width: 460px; }
+.modal-card.xwide { width: 720px; }
 .modal-head { padding: 16px 20px; border-bottom: 1px solid var(--border-faint); }
 .modal-head .title { font-weight: 600; font-size: 15px; }
 .modal-head .sub { font-size: 11.5px; color: var(--text-faint); margin-top: 2px; }
@@ -530,6 +531,17 @@ input, select, textarea, button { font-family: inherit; }
   font-size: 10px; padding: 2px 7px; border-radius: 999px; background: var(--surface-alt);
   color: var(--text-faint); border: 1px solid var(--border-faint);
 }
+.eval-group-card { border: 1px solid var(--border-strong); border-radius: 10px; padding: 14px; margin-bottom: 14px; background: var(--content-bg); }
+.eval-group-head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.eval-group-head input[type="text"] { flex: 1; min-width: 120px; font-weight: 600; }
+.eval-question-card { border: 1px solid var(--border-faint); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: var(--surface-alt); }
+.eval-question-head { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+.eval-question-head textarea { flex: 1; min-width: 0; }
+.eval-question-flags { display: flex; gap: 12px; flex-wrap: wrap; margin: 6px 0; font-size: 11.5px; color: var(--text-faint); }
+.eval-question-flags label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.eval-answer-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.eval-answer-row input[type="text"] { flex: 1; min-width: 0; }
+.eval-answer-row input[type="number"] { width: 64px; flex: none; }
 
 /* ---- Theme toggle ---- */
 .theme-toggle-btn {
