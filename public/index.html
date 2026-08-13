@@ -176,7 +176,10 @@
                       <div id="queueSelectionSummary" style="font-weight:600;font-size:16px">Select a queue</div>
                       <div id="queueSelectionMeta" class="sub" style="font-size:12px;color:var(--text-faint);margin-top:2px"></div>
                     </div>
-                    <button id="queuesDeleteSelectedBtn" class="btn btn-danger hidden" style="padding:8px 14px;font-size:12px;flex:none"></button>
+                    <div style="display:flex;gap:8px;flex:none">
+                      <button id="queueSlaEditBtn" class="btn btn-subtle hidden" style="padding:8px 14px;font-size:12px"></button>
+                      <button id="queuesDeleteSelectedBtn" class="btn btn-danger hidden" style="padding:8px 14px;font-size:12px"></button>
+                    </div>
                   </div>
                   <div id="queueSettingsGrid" class="settings-grid hidden" style="margin-top:14px"></div>
                 </div>
@@ -556,6 +559,29 @@
           <span class="field-inline-error hidden" id="evalFormModalError" style="margin-right:auto"></span>
           <button id="evalFormModalCancelBtn" class="btn btn-outline">Cancel</button>
           <button id="evalFormModalSaveBtn" class="btn btn-accent">Save form</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Queue Service Level (SLA) bulk-edit modal ===== -->
+    <div id="queueSlaModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card wide">
+        <div class="modal-head">
+          <div class="title" id="queueSlaModalTitle">Service Level (SLA)</div>
+          <div class="sub" id="queueSlaModalSub"></div>
+        </div>
+        <div class="modal-body">
+          <p class="sub" style="font-size:12px;color:var(--text-faint)">
+            Check a media type to change its target — unchecked types are left exactly as they are. Only media
+            types already configured on the selected queue(s) are shown.
+          </p>
+          <div id="queueSlaModalBody"></div>
+          <div id="queueSlaResults" class="bulk-results"></div>
+        </div>
+        <div class="modal-foot">
+          <span class="field-inline-error hidden" id="queueSlaModalError" style="margin-right:auto"></span>
+          <button id="queueSlaCancelBtn" class="btn btn-outline">Cancel</button>
+          <button id="queueSlaApplyBtn" class="btn btn-accent">Apply</button>
         </div>
       </div>
     </div>

@@ -658,6 +658,7 @@ function closeOverlays() {
   document.getElementById('userModalOverlay').classList.add('hidden');
   document.getElementById('promptModalOverlay').classList.add('hidden');
   document.getElementById('evalFormModalOverlay').classList.add('hidden');
+  document.getElementById('queueSlaModalOverlay').classList.add('hidden');
 }
 
 document.getElementById('paletteInput').addEventListener('input', renderPalette);
@@ -1608,6 +1609,10 @@ async function refreshManagedQueuePanels() {
   deleteSelectedBtn.classList.toggle('hidden', queueIds.length === 0);
   deleteSelectedBtn.textContent = `Delete selected (${queueIds.length})`;
 
+  const slaEditBtn = document.getElementById('queueSlaEditBtn');
+  slaEditBtn.classList.toggle('hidden', queueIds.length === 0);
+  slaEditBtn.textContent = queueIds.length === 1 ? 'Edit SLA / Service Level…' : `Edit SLA / Service Level (${queueIds.length})…`;
+
   if (queueIds.length === 0) {
     summary.textContent = 'Select a queue';
     meta.textContent = 'Click a queue on the left to manage it (select several to bulk-assign).';
@@ -1971,6 +1976,176 @@ async function onLibraryModeClick(mode) {
 document.getElementById('queueLibraryChooseBtn').addEventListener('click', () => {
   if (!getSelectedQueueIds().length) { showToast('Select at least one queue first.', true); return; }
   openPickModal('libraryChoose');
+});
+
+// ---- Queue Service Level (SLA) bulk edit -----------------------------------
+// A queue's "Service Level" is set per media type (call, email, chat, ...): a target percentage
+// of interactions that must be handled within a duration window — that pairing IS what Genesys
+// (and this UI) calls the SLA. Genesys's queue list endpoint only returns summary rows, so —
+// same safety pattern as everywhere else in this app — the modal re-fetches each selected
+// queue's full mediaSettings before showing anything, and a PATCH only ever touches the
+// serviceLevel of media types the user explicitly checked, leaving every other field
+// (alerting timeout, auto-answer, other media types, ...) exactly as it was.
+
+const MEDIA_TYPE_LABELS = {
+  call: 'Voice (Call)',
+  callback: 'Callback',
+  chat: 'Web Chat',
+  email: 'Email',
+  message: 'Message',
+  socialExpression: 'Social Expression',
+  video: 'Video',
+};
+const MEDIA_TYPE_ORDER = ['call', 'callback', 'chat', 'email', 'message', 'socialExpression', 'video'];
+
+function mediaTypeLabel(key) {
+  return MEDIA_TYPE_LABELS[key] || key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+let queueSlaFullQueues = []; // full-detail queues fetched when the modal opened
+let queueSlaRowState = []; // [{ key, checkbox, percentInput, secondsInput, queuesWithType: [id,...] }]
+
+async function openQueueSlaModal() {
+  const queueIds = getSelectedQueueIds();
+  if (!queueIds.length) { showToast('Select at least one queue first.', true); return; }
+
+  showError('queueSlaModalError', '');
+  document.getElementById('queueSlaResults').innerHTML = '';
+  const names = getSelectedQueueNames();
+  document.getElementById('queueSlaModalTitle').textContent =
+    queueIds.length === 1 ? `Service Level (SLA) — ${names[0]}` : `Service Level (SLA) — ${queueIds.length} queues`;
+  document.getElementById('queueSlaModalSub').textContent = names.join(', ');
+
+  const body = document.getElementById('queueSlaModalBody');
+  body.innerHTML = '';
+  body.appendChild(el('div', { class: 'sub', text: 'Loading current settings…' }));
+  document.getElementById('queueSlaModalOverlay').classList.remove('hidden');
+
+  try {
+    queueSlaFullQueues = await Promise.all(queueIds.map((id) => proxy('GET', `/api/v2/routing/queues/${id}`)));
+    renderQueueSlaModalBody();
+  } catch (err) {
+    body.innerHTML = '';
+    showError('queueSlaModalError', err.message);
+  }
+}
+
+function renderQueueSlaModalBody() {
+  const body = document.getElementById('queueSlaModalBody');
+  body.innerHTML = '';
+  queueSlaRowState = [];
+
+  const presentKeys = new Set();
+  queueSlaFullQueues.forEach((q) => Object.keys(q.mediaSettings || {}).forEach((k) => presentKeys.add(k)));
+  const orderedKeys = [
+    ...MEDIA_TYPE_ORDER.filter((k) => presentKeys.has(k)),
+    ...[...presentKeys].filter((k) => !MEDIA_TYPE_ORDER.includes(k)).sort(),
+  ];
+
+  if (!orderedKeys.length) {
+    body.appendChild(
+      el('div', { class: 'sla-media-row empty-state', text: 'None of the selected queues have any media types configured yet.' })
+    );
+    return;
+  }
+
+  orderedKeys.forEach((key) => {
+    const queuesWithType = queueSlaFullQueues.filter((q) => q.mediaSettings && q.mediaSettings[key]);
+    const slas = queuesWithType.map((q) => q.mediaSettings[key].serviceLevel).filter(Boolean);
+    const percents = new Set(slas.map((s) => Math.round(s.percentage * 100)));
+    const seconds = new Set(slas.map((s) => Math.round(s.durationMs / 1000)));
+    const uniformPercent = percents.size === 1 ? [...percents][0] : '';
+    const uniformSeconds = seconds.size === 1 ? [...seconds][0] : '';
+
+    const checkbox = el('input', { type: 'checkbox' });
+    const percentInput = el('input', {
+      type: 'number', min: '0', max: '100', step: '1', disabled: 'disabled',
+      placeholder: percents.size > 1 ? 'Mixed' : '—',
+    });
+    if (uniformPercent !== '') percentInput.value = uniformPercent;
+    const secondsInput = el('input', {
+      type: 'number', min: '1', step: '1', disabled: 'disabled',
+      placeholder: seconds.size > 1 ? 'Mixed' : '—',
+    });
+    if (uniformSeconds !== '') secondsInput.value = uniformSeconds;
+
+    checkbox.addEventListener('change', () => {
+      percentInput.disabled = !checkbox.checked;
+      secondsInput.disabled = !checkbox.checked;
+    });
+
+    const coverageNote =
+      queuesWithType.length < queueSlaFullQueues.length
+        ? ` (${queuesWithType.length} of ${queueSlaFullQueues.length} selected queues — others don't have this media type and will be skipped)`
+        : '';
+
+    const row = el('div', { class: 'sla-media-row' }, [
+      el('label', { class: 'sla-media-label' }, [
+        checkbox,
+        el('span', {}, [
+          document.createTextNode(mediaTypeLabel(key)),
+          coverageNote ? el('span', { class: 'sla-coverage', text: coverageNote }) : document.createTextNode(''),
+        ]),
+      ]),
+      el('div', { class: 'sla-field' }, [el('span', { text: 'Target %' }), percentInput]),
+      el('div', { class: 'sla-field' }, [el('span', { text: 'Within (sec)' }), secondsInput]),
+    ]);
+    body.appendChild(row);
+
+    queueSlaRowState.push({ key, label: mediaTypeLabel(key), checkbox, percentInput, secondsInput, queuesWithType: queuesWithType.map((q) => q.id) });
+  });
+}
+
+async function applyQueueSla() {
+  showError('queueSlaModalError', '');
+  const changes = [];
+  for (const row of queueSlaRowState) {
+    if (!row.checkbox.checked) continue;
+    const pctRaw = row.percentInput.value.trim();
+    const secRaw = row.secondsInput.value.trim();
+    if (!pctRaw || !secRaw) return showError('queueSlaModalError', `Enter both Target % and Within (sec) for ${row.label}, or uncheck it.`);
+    const pct = Number(pctRaw);
+    const sec = Number(secRaw);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) return showError('queueSlaModalError', `${row.label}: Target % must be between 0 and 100.`);
+    if (!Number.isFinite(sec) || sec <= 0) return showError('queueSlaModalError', `${row.label}: Within (sec) must be a positive number.`);
+    changes.push({ key: row.key, percentage: pct / 100, durationMs: Math.round(sec * 1000), queueIds: row.queuesWithType });
+  }
+  if (!changes.length) return showError('queueSlaModalError', 'Check at least one media type to apply changes to.');
+
+  const applyBtn = document.getElementById('queueSlaApplyBtn');
+  await withBusy(applyBtn, 'Applying…', async () => {
+    const results = [];
+    for (const q of queueSlaFullQueues) {
+      const relevant = changes.filter((c) => c.queueIds.includes(q.id));
+      if (!relevant.length) {
+        results.push({ ok: false, label: q.name, message: "none of the checked media types exist on this queue — skipped" });
+        continue;
+      }
+      try {
+        const mediaSettings = Object.assign({}, q.mediaSettings);
+        relevant.forEach((c) => {
+          mediaSettings[c.key] = Object.assign({}, mediaSettings[c.key], {
+            serviceLevel: { percentage: c.percentage, durationMs: c.durationMs },
+          });
+        });
+        await proxy('PATCH', `/api/v2/routing/queues/${q.id}`, { body: { mediaSettings } });
+        results.push({ ok: true, label: q.name });
+      } catch (err) {
+        results.push({ ok: false, label: q.name, message: err.message });
+      }
+    }
+    renderBulkResults('queueSlaResults', results);
+    const okCount = results.filter((r) => r.ok).length;
+    showToast(`${okCount} of ${results.length} queue(s) updated.`, okCount < results.length);
+    if (okCount) await refreshManagedQueuePanels();
+  });
+}
+
+document.getElementById('queueSlaEditBtn').addEventListener('click', openQueueSlaModal);
+document.getElementById('queueSlaCancelBtn').addEventListener('click', () => document.getElementById('queueSlaModalOverlay').classList.add('hidden'));
+document.getElementById('queueSlaApplyBtn').addEventListener('click', applyQueueSla);
+document.getElementById('queueSlaModalOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'queueSlaModalOverlay') document.getElementById('queueSlaModalOverlay').classList.add('hidden');
 });
 
 // ---- Users & Divisions ----------------------------------------------
