@@ -451,6 +451,7 @@ const tabLoaders = {
   evalforms: () => evalFormsResource.reset(),
   audit: loadAuditTab,
   explorer: () => {},
+  releasenotes: () => renderReleaseNotes(),
 };
 
 const tabMeta = {
@@ -465,6 +466,7 @@ const tabMeta = {
   evalforms: { title: 'Evaluation Forms', sub: 'QA scorecards used to evaluate recorded interactions', create: null, bulk: false },
   audit: { title: 'Audit Log', sub: 'Who changed what, and when', create: null, bulk: false },
   explorer: { title: 'API Explorer', sub: 'Direct access to any Genesys Cloud API v2 endpoint', create: null, bulk: false },
+  releasenotes: { title: 'Release Notes', sub: "What's shipped in this toolkit, newest first", create: null, bulk: false },
 };
 
 function setActiveTab(tab) {
@@ -619,7 +621,7 @@ function paletteActions() {
   const nav = [
     ['canned', 'Canned Responses'], ['wrapup', 'Wrap-up Codes'], ['queues', 'Queues'], ['interactions', 'Disconnect Interaction'],
     ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['schedules', 'Schedules'],
-    ['evalforms', 'Evaluation Forms'], ['explorer', 'API Explorer'],
+    ['evalforms', 'Evaluation Forms'], ['explorer', 'API Explorer'], ['releasenotes', 'Release Notes'],
   ];
   const items = nav.map(([k, l]) => ({ label: `Go to ${l}`, tag: 'Navigate', icon: '→', iconBg: '#4b5b68', run: () => setActiveTab(k) }));
   items.unshift(
@@ -4828,6 +4830,90 @@ async function loadAuditTab() {
     document.getElementById('auditTo').value = toDatetimeLocalValue(now);
     await runAuditSearch();
   }
+}
+
+// ---- Release Notes ----------------------------------------------------
+// Static, hand-curated content (not fetched from Genesys) — mirrors this toolkit's own git
+// history, newest first. Update this array when shipping something worth calling out.
+
+const RELEASE_NOTES = [
+  {
+    date: '2026-08-15',
+    title: 'Disconnect Interaction module',
+    items: [
+      'New Routing → Disconnect Interaction tab: pick one or more queues (each showing its configured media types up front), load active interactions, and disconnect a specific interaction, a checked subset, or every interaction on the selected queue(s).',
+      'Every disconnect path requires an explicit, cannot-be-undone confirmation and reports per-interaction results.',
+      "Fixed app-wide: Genesys API error messages were being silently dropped in favor of a generic \"Request failed\" message — the real reason now shows everywhere a call fails.",
+    ],
+  },
+  {
+    date: '2026-08-14',
+    title: 'Bulk Service Level (SLA) editor for Queues',
+    items: [
+      'Bulk-edit Target %, Within (sec), and Alerting timeout across one or many queues at once, per media type.',
+      "Enable SLA on media types a queue doesn't have configured yet, with an explicit opt-in and a review/diff step before applying.",
+      'Save and reapply named SLA presets (stored locally in your browser).',
+      'Queue detail tiles now show SLA and alerting timeout for every configured media type, not just the first one found.',
+    ],
+  },
+  {
+    date: '2026-08-13',
+    title: 'Evaluation Forms module',
+    items: [
+      'Build QA evaluation forms with question groups, weighted multiple-choice answers, and critical/kill-question flags.',
+      "Generate a form from a plain-text description of your criteria, using the same AI key configured under Architect.",
+      'Import/export forms as JSON; editing always re-fetches the full form first so partial list data can never overwrite your questions.',
+    ],
+  },
+  {
+    date: '2026-08-10',
+    title: 'Prompts: bulk actions and language filtering',
+    items: [
+      'Bulk select/export/delete for Prompts and Flows.',
+      'Filter Prompts by any number of languages at once, with a language badge shown per row.',
+      "Corrected the Arabic locale list to match Genesys's actual supported variants.",
+    ],
+  },
+  {
+    date: '2026-08-09',
+    title: 'Division management and Prompt language import/export',
+    items: [
+      'Full division CRUD, plus a "manage users" picker to add/remove users from a division.',
+      'Per-language TTS text on Architect Prompts across 47 standard locale codes, with JSON import/export to move a prompt between orgs with all its languages intact.',
+    ],
+  },
+  {
+    date: '2026-08-03',
+    title: 'Schedules and rich-text Canned Responses',
+    items: [
+      'Full CRUD for Architect Schedules — name, start/end, optional iCal RRULE recurrence, and division.',
+      'Canned Responses now support rich text formatting (font, size, bold/italic/underline, color).',
+    ],
+  },
+  {
+    date: '2026-07-31',
+    title: 'Initial release',
+    items: [
+      'Canned Responses, Wrap-up Codes, Queues, Users & Divisions, Skills & Routing.',
+      'Architect: multi-provider AI-assisted flow generation.',
+      'Audit Log viewer and a built-in API Explorer.',
+      'Dark mode and a mobile-responsive layout.',
+    ],
+  },
+];
+
+function renderReleaseNotes() {
+  const container = document.getElementById('releaseNotesList');
+  container.innerHTML = '';
+  RELEASE_NOTES.forEach((r) => {
+    container.appendChild(
+      el('div', { class: 'card card-pad', style: 'margin-bottom:14px' }, [
+        el('div', { class: 'release-note-date', text: r.date }),
+        el('div', { class: 'release-note-title', text: r.title }),
+        el('ul', { class: 'release-note-list' }, r.items.map((item) => el('li', { text: item }))),
+      ])
+    );
+  });
 }
 
 // ---- init ----------------------------------------------------
