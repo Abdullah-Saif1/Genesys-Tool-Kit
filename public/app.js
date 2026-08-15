@@ -115,7 +115,11 @@ async function proxy(method, apiPath, { query, body } = {}) {
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
-    throw new Error(data.error || `Request failed (${resp.status})`);
+    // `.error` is set only when our own /api/proxy route fails before ever reaching Genesys (bad
+    // path, auth, etc). A real Genesys API error is forwarded through as-is and uses `.message`
+    // (sometimes with `.code`) instead — without this fallback, every Genesys-side error surfaced
+    // as a generic "Request failed (4xx)" with the actual reason silently dropped.
+    throw new Error(data.error || data.message || `Request failed (${resp.status})`);
   }
   return data;
 }
@@ -439,6 +443,7 @@ const tabLoaders = {
   canned: loadCannedTab,
   wrapup: () => wrapupResource.reset(),
   queues: loadQueuesTab,
+  interactions: () => interactionQueuesResource.reset(),
   users: loadUsersAndDivisions,
   skills: () => skillsResource.reset(),
   architect: loadArchitectTab,
@@ -452,6 +457,7 @@ const tabMeta = {
   canned: { title: 'Canned Responses', sub: 'Reusable agent replies, organised by library', create: 'New response', bulk: true },
   wrapup: { title: 'Wrap-up Codes', sub: 'Disposition codes agents apply after an interaction', create: 'New code', bulk: true },
   queues: { title: 'Queues', sub: 'Select one or more queues to manage members, codes & libraries', create: 'New queue', bulk: false },
+  interactions: { title: 'Disconnect Interaction', sub: 'Disconnect a specific live interaction, or every interaction on selected queue(s)', create: null, bulk: false },
   users: { title: 'Users & Divisions', sub: 'Your organisation directory', create: null, bulk: false },
   skills: { title: 'Skills & Routing', sub: 'ACD skills used for skills-based routing', create: 'New skill', bulk: false },
   architect: { title: 'Architect', sub: 'Flows & prompts, and AI-assisted flow generation', create: null, bulk: false },
@@ -611,7 +617,7 @@ async function checkStatus() {
 
 function paletteActions() {
   const nav = [
-    ['canned', 'Canned Responses'], ['wrapup', 'Wrap-up Codes'], ['queues', 'Queues'],
+    ['canned', 'Canned Responses'], ['wrapup', 'Wrap-up Codes'], ['queues', 'Queues'], ['interactions', 'Disconnect Interaction'],
     ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['schedules', 'Schedules'],
     ['evalforms', 'Evaluation Forms'], ['explorer', 'API Explorer'],
   ];
@@ -2385,6 +2391,301 @@ document.getElementById('queueSlaBackBtn').addEventListener('click', () => {
 document.getElementById('queueSlaConfirmBtn').addEventListener('click', confirmQueueSlaApply);
 document.getElementById('queueSlaModalOverlay').addEventListener('click', (e) => {
   if (e.target.id === 'queueSlaModalOverlay') document.getElementById('queueSlaModalOverlay').classList.add('hidden');
+});
+
+// ---- Interactions (disconnect live interactions) ---------------------------
+// Genesys has no "list active conversations by queue" endpoint in the core Conversations API, so
+// discovery goes through an Analytics conversation-details query instead (the same mechanism
+// supervisor "live" views use), filtered client-side to conversations that haven't ended yet.
+// Disconnecting a conversation means disconnecting every one of its participants via the generic
+// per-participant PATCH endpoint — media-type-agnostic, so it works the same for calls, chats,
+// emails, messages, and callbacks without branching per media type.
+
+const INTERACTION_LOOKBACK_HOURS = 6; // keep in sync with the notice-box copy in index.html
+
+let currentInteractions = []; // [{ conversationId, queueId, queueName, mediaTypes, participantIds, participantSummary, startedAt }]
+const selectedInteractionIds = new Set(); // conversationIds checked in the results table
+
+const interactionQueuesResource = createListResource({
+  path: '/api/v2/routing/queues',
+  pageSize: 50,
+  containerId: 'interactionQueuesTableBody',
+  filterId: 'interactionQueuesFilter',
+  loadMoreId: 'interactionQueuesLoadMoreBtn',
+  buildRow: (queue) => {
+    const selected = selectedInteractionQueueIds.has(queue.id);
+    const divisionName = (queue.division && queue.division.name) || '';
+    // Shows every media type actually configured on the queue (Call, Email, Chat, ...) so it's
+    // clear up front what "Load active interactions" could surface for it, before spending a
+    // call on it. Only shown when the list response actually included mediaSettings — never
+    // guessed — same defensive rule used for the Evaluation Forms Groups-count fix.
+    const mediaKeys = queue.mediaSettings ? orderMediaTypeKeys(Object.keys(queue.mediaSettings)) : null;
+    const mediaText = mediaKeys && mediaKeys.length ? mediaKeys.map((k) => mediaTypeLabel(k)).join(', ') : null;
+
+    const row = el('div', { class: `queue-list-item${selected ? ' selected' : ''}` }, [
+      el('div', { class: 'name' }, [cellText(queue.name)]),
+      el('div', { class: 'meta', text: divisionName }),
+      el('div', { class: 'meta', text: mediaText || 'Media types unavailable' }),
+    ]);
+    row.addEventListener('click', () => toggleInteractionQueueSelection(queue.id));
+    return row;
+  },
+  onLoaded: () => interactionQueuesResource.render(),
+});
+
+const selectedInteractionQueueIds = new Set();
+
+function toggleInteractionQueueSelection(queueId) {
+  if (selectedInteractionQueueIds.has(queueId)) selectedInteractionQueueIds.delete(queueId); else selectedInteractionQueueIds.add(queueId);
+  interactionQueuesResource.render();
+  refreshInteractionQueueSelectionSummary();
+}
+
+function getSelectedInteractionQueueIds() { return [...selectedInteractionQueueIds]; }
+function getSelectedInteractionQueueNames() {
+  return interactionQueuesResource.state.items.filter((q) => selectedInteractionQueueIds.has(q.id)).map((q) => q.name);
+}
+
+function refreshInteractionQueueSelectionSummary() {
+  const ids = getSelectedInteractionQueueIds();
+  const names = getSelectedInteractionQueueNames();
+  const selectedQueues = interactionQueuesResource.state.items.filter((q) => selectedInteractionQueueIds.has(q.id));
+
+  document.getElementById('interactionQueuesSelectionSummary').textContent =
+    ids.length ? `${ids.length} queue${ids.length === 1 ? '' : 's'} selected` : 'No queues selected';
+  document.getElementById('interactionQueuesSelectionMeta').textContent = names.join(', ');
+
+  // Union of every media type configured across the selected queue(s) — what "Load active
+  // interactions" could possibly surface, shown before you even click it.
+  const mediaKeySet = new Set();
+  let anyMediaKnown = false;
+  selectedQueues.forEach((q) => {
+    if (!q.mediaSettings) return;
+    anyMediaKnown = true;
+    Object.keys(q.mediaSettings).forEach((k) => mediaKeySet.add(k));
+  });
+  const mediaEl = document.getElementById('interactionQueuesSelectionMedia');
+  if (!ids.length) {
+    mediaEl.textContent = '';
+  } else if (!anyMediaKnown) {
+    mediaEl.textContent = 'Media types: unavailable';
+  } else if (!mediaKeySet.size) {
+    mediaEl.textContent = 'Media types: none configured';
+  } else {
+    mediaEl.textContent = `Media types: ${orderMediaTypeKeys([...mediaKeySet]).map((k) => mediaTypeLabel(k)).join(', ')}`;
+  }
+}
+
+function relativeTimeFrom(iso) {
+  if (!iso) return '—';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
+}
+
+function interactionMediaText(mediaTypes) {
+  return mediaTypes.length ? mediaTypes.map((t) => mediaTypeLabel(t)).join(', ') : '—';
+}
+
+// Best-effort extraction from an Analytics conversation-details record — the schema here is the
+// one part of this module not exercised against a live org, so this stays defensive: every field
+// falls back to something sane rather than throwing if the response shape differs from expected.
+function extractInteractionFromAnalyticsConversation(conv, selectedQueueIds, queueNameById) {
+  const participants = conv.participants || [];
+  const mediaTypes = new Set();
+  const queueIds = new Set();
+
+  participants.forEach((p) => {
+    (p.sessions || []).forEach((s) => {
+      if (s.mediaType) mediaTypes.add(s.mediaType);
+      (s.segments || []).forEach((seg) => { if (seg.queueId) queueIds.add(seg.queueId); });
+    });
+  });
+
+  // A transferred conversation may have touched more than one queue — prefer whichever queue the
+  // user actually selected over whatever else shows up in the segment history.
+  const matchedQueueId = [...queueIds].find((id) => selectedQueueIds.includes(id)) || [...queueIds][0] || null;
+  const queueName = matchedQueueId ? queueNameById[matchedQueueId] || matchedQueueId : '—';
+
+  const participantSummary = participants
+    .map((p) => {
+      if (p.purpose === 'agent' || p.purpose === 'user') {
+        const user = allUsersCache.find((u) => u.id === p.userId);
+        return user ? user.name : 'Agent';
+      }
+      if (p.purpose === 'customer' || p.purpose === 'external') return 'Customer';
+      return p.purpose || 'Participant';
+    })
+    .join(', ');
+
+  return {
+    conversationId: conv.conversationId,
+    queueId: matchedQueueId,
+    queueName,
+    mediaTypes: [...mediaTypes],
+    participantIds: participants.map((p) => p.participantId).filter(Boolean),
+    participantSummary: participantSummary || '—',
+    startedAt: conv.conversationStart,
+  };
+}
+
+async function loadActiveInteractions() {
+  const queueIds = getSelectedInteractionQueueIds();
+  if (!queueIds.length) { showToast('Select at least one queue first.', true); return; }
+
+  showError('interactionsError', '');
+  document.getElementById('interactionsResults').innerHTML = '';
+  selectedInteractionIds.clear();
+  currentInteractions = [];
+  renderInteractionsTable();
+
+  const btn = document.getElementById('interactionsLoadBtn');
+  await withBusy(btn, 'Loading…', async () => {
+    const now = new Date();
+    const start = new Date(now.getTime() - INTERACTION_LOOKBACK_HOURS * 3600 * 1000);
+    const body = {
+      interval: `${start.toISOString()}/${now.toISOString()}`,
+      order: 'desc',
+      orderBy: 'conversationStart',
+      paging: { pageSize: 100, pageNumber: 1 },
+      // queueId is a segment-level dimension, not a conversation-level one (a conversation can
+      // touch more than one queue across transfers) -- confirmed live: the API rejects it under
+      // conversationFilters with "not valid for field type [ConversationDetailDimension]".
+      segmentFilters: [
+        {
+          type: 'or',
+          predicates: queueIds.map((id) => ({ type: 'dimension', dimension: 'queueId', operator: 'matches', value: id })),
+        },
+      ],
+    };
+    try {
+      const data = await proxy('POST', '/api/v2/analytics/conversations/details/query', { body });
+      const queueNameById = {};
+      interactionQueuesResource.state.items.forEach((q) => { queueNameById[q.id] = q.name; });
+      currentInteractions = (data.conversations || [])
+        .filter((c) => !c.conversationEnd) // still in progress — the query also returns recently-ended ones
+        .map((c) => extractInteractionFromAnalyticsConversation(c, queueIds, queueNameById));
+      renderInteractionsTable();
+    } catch (err) {
+      showError('interactionsError', err.message);
+    }
+  });
+}
+
+function renderInteractionsTable() {
+  const body = document.getElementById('interactionsTableBody');
+  body.innerHTML = '';
+  document.getElementById('interactionsEmpty').classList.toggle('hidden', currentInteractions.length > 0);
+
+  currentInteractions.forEach((it) => {
+    const checkbox = el('input', { type: 'checkbox' });
+    checkbox.checked = selectedInteractionIds.has(it.conversationId);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) selectedInteractionIds.add(it.conversationId); else selectedInteractionIds.delete(it.conversationId);
+      updateInteractionsBulkButtons();
+    });
+
+    const disconnectBtn = el('span', { class: 'row-delete', text: 'Disconnect' });
+    disconnectBtn.addEventListener('click', async () => {
+      const ok = await confirmModal({
+        title: 'Disconnect interaction',
+        message: `Disconnect this ${interactionMediaText(it.mediaTypes)} interaction on "${it.queueName}" right now? This immediately drops the live interaction and cannot be undone.`,
+        confirmLabel: 'Disconnect',
+      });
+      if (!ok) return;
+      await runInteractionDisconnect([it], disconnectBtn, 'Disconnecting…');
+    });
+
+    body.appendChild(
+      gridRow('auto 1.5fr .9fr 1.7fr 1fr auto', [
+        checkbox,
+        cellText(it.queueName, 'name'),
+        cellText(interactionMediaText(it.mediaTypes), 'muted'),
+        cellText(it.participantSummary, 'muted'),
+        cellText(relativeTimeFrom(it.startedAt), 'muted'),
+        disconnectBtn,
+      ])
+    );
+  });
+
+  updateInteractionsBulkButtons();
+}
+
+function updateInteractionsBulkButtons() {
+  const selBtn = document.getElementById('interactionsDisconnectSelectedBtn');
+  const allBtn = document.getElementById('interactionsDisconnectAllBtn');
+  selBtn.classList.toggle('hidden', selectedInteractionIds.size === 0);
+  selBtn.textContent = `Disconnect selected (${selectedInteractionIds.size})`;
+  allBtn.classList.toggle('hidden', currentInteractions.length === 0);
+  allBtn.textContent = `Disconnect ALL on selected queue(s) (${currentInteractions.length})`;
+}
+
+// Disconnects every participant of each given interaction. Media-agnostic: the same participant
+// PATCH endpoint handles calls, chats, emails, messages and callbacks alike.
+async function disconnectInteractions(list) {
+  const results = [];
+  for (const item of list) {
+    try {
+      if (!item.participantIds.length) throw new Error('no participants found for this interaction');
+      for (const participantId of item.participantIds) {
+        await proxy('PATCH', `/api/v2/conversations/${item.conversationId}/participants/${participantId}`, { body: { state: 'disconnected' } });
+      }
+      results.push({ ok: true, label: item.label, conversationId: item.conversationId });
+    } catch (err) {
+      results.push({ ok: false, label: item.label, message: err.message, conversationId: item.conversationId });
+    }
+  }
+  return results;
+}
+
+async function runInteractionDisconnect(items, busyEl, busyLabel) {
+  await withBusy(busyEl, busyLabel, async () => {
+    const results = await disconnectInteractions(
+      items.map((it) => ({ conversationId: it.conversationId, participantIds: it.participantIds, label: `${it.queueName} (${interactionMediaText(it.mediaTypes)})` }))
+    );
+    renderBulkResults('interactionsResults', results);
+    const succeededIds = new Set(results.filter((r) => r.ok).map((r) => r.conversationId));
+    currentInteractions = currentInteractions.filter((it) => !succeededIds.has(it.conversationId));
+    succeededIds.forEach((id) => selectedInteractionIds.delete(id));
+    renderInteractionsTable();
+    const okCount = results.filter((r) => r.ok).length;
+    showToast(`${okCount} of ${results.length} interaction(s) disconnected.`, okCount < results.length);
+  });
+}
+
+document.getElementById('interactionQueuesRefreshBtn').addEventListener('click', () => {
+  interactionQueuesResource.reset().catch((err) => showToast(err.message, true));
+});
+
+document.getElementById('interactionsLoadBtn').addEventListener('click', () => {
+  loadActiveInteractions();
+});
+
+document.getElementById('interactionsDisconnectSelectedBtn').addEventListener('click', async () => {
+  const items = currentInteractions.filter((it) => selectedInteractionIds.has(it.conversationId));
+  if (!items.length) return;
+  const ok = await confirmModal({
+    title: `Disconnect ${items.length} interaction${items.length === 1 ? '' : 's'}`,
+    message: `Disconnect ${items.length} selected interaction(s) right now? This immediately drops live interactions and cannot be undone.`,
+    confirmLabel: 'Disconnect',
+  });
+  if (!ok) return;
+  await runInteractionDisconnect(items, document.getElementById('interactionsDisconnectSelectedBtn'), 'Disconnecting…');
+});
+
+document.getElementById('interactionsDisconnectAllBtn').addEventListener('click', async () => {
+  if (!currentInteractions.length) return;
+  const queueNames = getSelectedInteractionQueueNames().join(', ') || 'the selected queue(s)';
+  const items = currentInteractions.slice();
+  const ok = await confirmModal({
+    title: `Disconnect ALL ${items.length} interactions`,
+    message: `Disconnect ALL ${items.length} currently active interaction(s) on ${queueNames}? This immediately drops every one of them and cannot be undone.`,
+    confirmLabel: `Disconnect all ${items.length}`,
+  });
+  if (!ok) return;
+  await runInteractionDisconnect(items, document.getElementById('interactionsDisconnectAllBtn'), 'Disconnecting…');
 });
 
 // ---- Users & Divisions ----------------------------------------------

@@ -97,6 +97,7 @@
           <div class="nav-item" data-tab="wrapup">Wrap-up Codes</div>
           <div class="nav-group-title">Routing</div>
           <div class="nav-item" data-tab="queues">Queues</div>
+          <div class="nav-item" data-tab="interactions">Disconnect Interaction</div>
           <div class="nav-item" data-tab="skills">Skills &amp; Routing</div>
           <div class="nav-group-title">Directory</div>
           <div class="nav-item" data-tab="users">Users &amp; Divisions</div>
@@ -218,6 +219,55 @@
                     <div id="queueLibraryChips" class="chip-row" style="margin-top:10px"></div>
                   </div>
                   <p id="queueLibraryError" class="field-error hidden" style="margin-top:10px"></p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Interactions -->
+          <section id="tab-interactions" class="tab-panel hidden">
+            <div class="notice-box">
+              Disconnects live, in-progress interactions immediately &mdash; this cannot be undone. Interactions are
+              discovered via a rolling 6-hour Genesys Analytics query and only ones still in progress are shown;
+              an interaction that started more than 6 hours ago won't appear. Always double-check before confirming.
+            </div>
+
+            <div class="queue-layout">
+              <div class="queue-master">
+                <div class="queue-master-search" style="display:flex;gap:6px">
+                  <input type="search" id="interactionQueuesFilter" style="flex:1" placeholder="&#128269;  Filter queues&hellip;" />
+                  <button id="interactionQueuesRefreshBtn" class="btn btn-subtle" title="Refresh queues" style="padding:8px 10px">&#8635;</button>
+                </div>
+                <div id="interactionQueuesTableBody" class="queue-list"></div>
+                <button id="interactionQueuesLoadMoreBtn" class="btn btn-outline hidden" style="margin:10px;width:calc(100% - 20px)">Load more</button>
+              </div>
+
+              <div class="queue-detail">
+                <div class="card card-pad">
+                  <div id="interactionQueuesSelectionSummary" style="font-weight:600;font-size:14px">No queues selected</div>
+                  <div id="interactionQueuesSelectionMeta" class="sub" style="font-size:12px;color:var(--text-faint);margin-top:2px"></div>
+                  <div id="interactionQueuesSelectionMedia" class="sub" style="font-size:12px;color:var(--text-faint);margin-top:2px"></div>
+                  <button id="interactionsLoadBtn" class="btn btn-accent" style="margin-top:12px;width:100%">Load active interactions</button>
+                </div>
+
+                <div class="card card-pad">
+                  <div class="detail-card-head">
+                    <div class="detail-card-title" id="interactionsListTitle">Active interactions</div>
+                    <div style="display:flex;gap:8px">
+                      <button id="interactionsDisconnectSelectedBtn" class="btn btn-danger hidden"></button>
+                      <button id="interactionsDisconnectAllBtn" class="btn btn-danger hidden"></button>
+                    </div>
+                  </div>
+
+                  <div class="grid-table" style="grid-template-columns:auto 1.5fr .9fr 1.7fr 1fr auto">
+                    <div class="grid-head" style="grid-template-columns:auto 1.5fr .9fr 1.7fr 1fr auto">
+                      <span></span><span>Queue</span><span>Media</span><span>Participants</span><span>Started</span><span></span>
+                    </div>
+                    <div id="interactionsTableBody"></div>
+                  </div>
+                  <p id="interactionsEmpty" class="empty-note hidden">No active interactions found for the selected queue(s).</p>
+                  <div id="interactionsResults" class="bulk-results"></div>
+                  <p id="interactionsError" class="field-error hidden" style="margin-top:10px"></p>
                 </div>
               </div>
             </div>
