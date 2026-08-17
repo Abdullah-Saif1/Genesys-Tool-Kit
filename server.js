@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
+const archiver = require('archiver');
 const { REGIONS } = require('./regions');
 const createArchitectRouter = require('./architect');
 
@@ -242,6 +243,44 @@ app.post('/api/proxy', async (req, res) => {
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }
+});
+
+// Generic "bundle these already-fetched files into one .zip" endpoint — used wherever a screen
+// exports several items at once (e.g. Data Actions) so selecting multiple produces one download
+// instead of one per item, while each entry inside the zip stays its own untouched file. Pure
+// utility, no Genesys call involved: the caller already has the content in hand and just needs
+// it zipped, which the browser can't do on its own without a bundled library. Still sits behind
+// this app's shared Basic Auth gate like every other route.
+app.post('/api/zip', (req, res) => {
+  const { files, zipFilename } = req.body || {};
+  if (!Array.isArray(files) || !files.length) {
+    return res.status(400).json({ error: 'files (array of { name, content }) is required' });
+  }
+
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', `attachment; filename="${(zipFilename || 'export').replace(/[^a-z0-9-]+/gi, '_')}.zip"`);
+
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  archive.on('error', (err) => {
+    console.error('[zip] stream error:', err);
+    res.end();
+  });
+  archive.pipe(res);
+
+  const usedNames = new Set();
+  files.forEach((f) => {
+    if (!f || !f.name || f.content == null) return;
+    let name = f.name;
+    let n = 2;
+    while (usedNames.has(name)) {
+      const dot = f.name.lastIndexOf('.');
+      name = dot === -1 ? `${f.name}_${n}` : `${f.name.slice(0, dot)}_${n}${f.name.slice(dot)}`;
+      n += 1;
+    }
+    usedNames.add(name);
+    archive.append(String(f.content), { name });
+  });
+  archive.finalize();
 });
 
 // Catches errors from middleware that runs before any route handler — e.g. the session store
