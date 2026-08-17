@@ -348,6 +348,12 @@
                   <button id="architectFlowsRefreshBtn" class="btn btn-subtle">&#8635; Refresh</button>
                 </div>
                 <input type="search" id="architectFlowsFilter" class="text-input" style="margin-bottom:10px;padding:9px 12px;font-size:12.5px" placeholder="&#128269;  Filter flows&hellip;" />
+                <div style="margin-bottom:10px">
+                  <select id="architectFlowsTypeFilter" class="text-input" style="padding:9px 12px;font-size:12.5px">
+                    <option value="">All types</option>
+                  </select>
+                  <p class="usage-note" id="architectFlowsTypeFilterHint" style="margin-top:6px">Only offers types seen in the flows already loaded below — use Load more first to widen the search.</p>
+                </div>
                 <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--text-faint);cursor:pointer">
                   <input type="checkbox" id="architectFlowsSelectAll" class="list-row-checkbox" />
                   Select all loaded

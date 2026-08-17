@@ -3485,6 +3485,20 @@ const architectFlowsState = { items: [], pageNumber: 0, total: 0 };
 const selectedFlowIds = new Set();
 let architectFlowsVisibleIds = [];
 
+// Type filter is a plain dropdown rather than hardcoding Genesys's flow-type enum here: the
+// options are derived from whatever's actually been loaded, so the list can never go stale as
+// Genesys adds new flow types over time. Runs client-side over already-loaded flows, same as the
+// name filter — only types seen so far are offered (see the hint text next to it in the markup).
+function renderArchitectFlowTypeOptions() {
+  const select = document.getElementById('architectFlowsTypeFilter');
+  const current = select.value;
+  const types = [...new Set(architectFlowsState.items.map((f) => f.type).filter(Boolean))].sort();
+  select.innerHTML = '';
+  select.appendChild(el('option', { value: '', text: 'All types' }));
+  types.forEach((type) => select.appendChild(el('option', { value: type, text: type })));
+  select.value = types.includes(current) ? current : '';
+}
+
 function getSelectedFlowIds() {
   return [...selectedFlowIds];
 }
@@ -3519,7 +3533,12 @@ function renderArchitectFlows() {
   const filterText = document.getElementById('architectFlowsFilter').value.trim().toLowerCase();
   const container = document.getElementById('architectFlowsList');
   container.innerHTML = '';
-  const filtered = architectFlowsState.items.filter((flow) => !filterText || (flow.name || '').toLowerCase().includes(filterText));
+  const activeType = document.getElementById('architectFlowsTypeFilter').value;
+  const filtered = architectFlowsState.items.filter((flow) => {
+    if (filterText && !(flow.name || '').toLowerCase().includes(filterText)) return false;
+    if (activeType && flow.type !== activeType) return false;
+    return true;
+  });
   architectFlowsVisibleIds = filtered.map((f) => f.id);
   filtered.forEach((flow) => {
     container.appendChild(
@@ -3541,6 +3560,7 @@ async function fetchArchitectFlowsPage(pageNumber) {
   architectFlowsState.total = data.total || 0;
   architectFlowsState.pageNumber = data.pageNumber || pageNumber;
   architectFlowsState.items = architectFlowsState.items.concat(data.entities || []);
+  renderArchitectFlowTypeOptions(); // newly-loaded flows may introduce types not seen before
   renderArchitectFlows();
 }
 
@@ -3579,6 +3599,7 @@ document.getElementById('architectFlowsRefreshBtn').addEventListener('click', ()
 document.getElementById('architectFlowsLoadMoreBtn').addEventListener('click', () => {
   fetchArchitectFlowsPage(architectFlowsState.pageNumber + 1).catch((err) => showError('architectFlowsError', err.message));
 });
+document.getElementById('architectFlowsTypeFilter').addEventListener('change', renderArchitectFlows);
 
 document.getElementById('architectFlowsSelectAll').addEventListener('change', (e) => {
   if (e.target.checked) architectFlowsVisibleIds.forEach((id) => selectedFlowIds.add(id));
@@ -3754,14 +3775,12 @@ document.getElementById('architectPromptsExportSelectedBtn').addEventListener('c
   if (!ids.length) return;
   const btn = document.getElementById('architectPromptsExportSelectedBtn');
   await withBusy(btn, 'Exporting…', async () => {
-    const results = await Promise.allSettled(ids.map((id) => fetchPromptWithResources(id)));
-    const ok = results.filter((r) => r.status === 'fulfilled').map((r) => promptExportShape(r.value));
-    const failedCount = results.length - ok.length;
-    if (ok.length) downloadJson('prompts-export-selected.json', ok);
-    showToast(
-      failedCount ? `Exported ${ok.length} of ${results.length} prompts (${failedCount} failed).` : `Exported ${ok.length} prompt${ok.length === 1 ? '' : 's'}.`,
-      !!failedCount
-    );
+    const fetched = await Promise.allSettled(ids.map((id) => fetchPromptWithResources(id)));
+    const prompts = fetched.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    const fetchFailedCount = fetched.length - prompts.length;
+    const results = await downloadPromptsAsAudio(prompts, 'prompts-selected');
+    const { message, isError } = summarizeAudioExport(results, 'prompt');
+    showToast(fetchFailedCount ? `${message} (${fetchFailedCount} prompt(s) couldn't be loaded.)` : message, isError || !!fetchFailedCount);
   });
 });
 
@@ -3934,25 +3953,115 @@ function downloadJson(filename, data) {
   URL.revokeObjectURL(url);
 }
 
-function promptExportShape(prompt) {
-  return {
-    name: prompt.name,
-    description: prompt.description || '',
-    resources: (prompt.resources || [])
-      .filter((r) => r.ttsString)
-      .map((r) => ({ language: r.language, ttsString: r.ttsString })),
-  };
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = el('a', { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
+
 
 async function fetchPromptWithResources(promptId) {
   return architectApi('GET', `/prompts/${encodeURIComponent(promptId)}${architectQueryString({ includeResources: true })}`);
 }
 
+// Downloads the actual audio file Genesys Cloud has for one prompt/language — the same file its
+// own "download" action gives you, not a JSON re-export. Throws with the server's real reason
+// (e.g. "no audio available yet") rather than silently producing an empty/corrupt file.
+async function downloadPromptLanguageAudio(promptId, language, filenameBase) {
+  const resp = await fetch(`/api/architect/prompts/${encodeURIComponent(promptId)}/resources/${encodeURIComponent(language)}/audio`);
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error || `Request failed (${resp.status})`);
+  }
+  const blob = await resp.blob();
+  downloadBlob(`${filenameBase}_${language}.wav`, blob);
+}
+
+// Headers can only hold ASCII, so the server base64-encodes the UTF-8 bytes of the results JSON
+// (X-Export-Results) — plain atob() would mangle any non-ASCII prompt name (Arabic, etc.) since
+// it treats each decoded byte as one character rather than reassembling UTF-8 sequences.
+function decodeBase64Utf8(base64) {
+  const binary = atob(base64);
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+// Shared by single/bulk/export-all. One file downloads directly; two or more are bundled into a
+// single .zip built server-side, so selecting many prompts produces one download instead of one
+// per file — both for practicality and because back-to-back programmatic downloads trigger the
+// browser's own "this site is trying to download multiple files" prompt.
+async function downloadPromptsAsAudio(prompts, zipFilename) {
+  const results = [];
+  const items = [];
+  prompts.forEach((prompt) => {
+    const languages = (prompt.resources || []).map((r) => r.language).filter(Boolean);
+    if (!languages.length) {
+      results.push({ ok: false, label: prompt.name, message: 'no language resources on this prompt' });
+      return;
+    }
+    languages.forEach((language) => items.push({ promptId: prompt.id, promptName: prompt.name, language }));
+  });
+  if (!items.length) return results;
+
+  if (items.length === 1) {
+    const only = items[0];
+    try {
+      await downloadPromptLanguageAudio(only.promptId, only.language, only.promptName.replace(/[^a-z0-9-]+/gi, '_'));
+      results.push({ ok: true, label: `${only.promptName} (${only.language})` });
+    } catch (err) {
+      results.push({ ok: false, label: `${only.promptName} (${only.language})`, message: err.message });
+    }
+    return results;
+  }
+
+  const resp = await fetch('/api/architect/prompts/audio-zip', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items, zipFilename: zipFilename || 'prompts-audio' }),
+  });
+
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    if (Array.isArray(data.results)) return results.concat(data.results);
+    results.push({ ok: false, label: `${items.length} file(s)`, message: data.error || `Request failed (${resp.status})` });
+    return results;
+  }
+
+  const resultsHeader = resp.headers.get('X-Export-Results');
+  if (resultsHeader) {
+    try {
+      results.push(...JSON.parse(decodeBase64Utf8(resultsHeader)));
+    } catch {
+      // The zip itself still downloads below even if the per-file summary can't be read.
+    }
+  }
+  const blob = await resp.blob();
+  downloadBlob(`${(zipFilename || 'prompts-audio').replace(/[^a-z0-9-]+/gi, '_')}.zip`, blob);
+  return results;
+}
+
+function summarizeAudioExport(results, singularNoun) {
+  const okCount = results.filter((r) => r.ok).length;
+  if (!results.length) return { message: `No ${singularNoun}s to export.`, isError: true };
+  if (!okCount) return { message: `No audio files could be downloaded — none of the selected ${singularNoun}s have rendered audio yet.`, isError: true };
+  const failed = results.length - okCount;
+  return {
+    message: failed
+      ? `Downloaded ${okCount} of ${results.length} audio file(s) (${failed} language(s) had no audio available).`
+      : `Downloaded ${okCount} audio file${okCount === 1 ? '' : 's'}.`,
+    isError: !!failed,
+  };
+}
+
 async function exportPrompt(prompt) {
   try {
     const full = await fetchPromptWithResources(prompt.id);
-    downloadJson(`prompt-${full.name.replace(/[^a-z0-9-]+/gi, '_')}.json`, promptExportShape(full));
-    showToast(`Exported "${full.name}".`);
+    const results = await downloadPromptsAsAudio([full], full.name);
+    const { message, isError } = summarizeAudioExport(results, 'language');
+    showToast(message, isError);
   } catch (err) {
     showToast(err.message, true);
   }
@@ -3977,8 +4086,9 @@ document.getElementById('architectPromptsExportAllBtn').addEventListener('click'
         if (!data.entities || !data.entities.length) break;
         pageNumber += 1;
       }
-      downloadJson('prompts-export.json', all.map(promptExportShape));
-      showToast(`Exported ${all.length} prompt${all.length === 1 ? '' : 's'}.`);
+      const results = await downloadPromptsAsAudio(all, 'prompts-all');
+      const { message, isError } = summarizeAudioExport(results, 'prompt');
+      showToast(message, isError);
     } catch (err) {
       showToast(err.message, true);
     }
@@ -5057,6 +5167,31 @@ async function loadAuditTab() {
 // history, newest first. Update this array when shipping something worth calling out.
 
 const RELEASE_NOTES = [
+  {
+    date: '2026-08-17',
+    title: 'Prompts now export as audio, not JSON',
+    items: [
+      'Export (single prompt, selected, or all) now downloads the actual .wav audio file per language — the same file Genesys Cloud\'s own "download" action gives you — instead of a JSON file of TTS text.',
+      'Exporting more than one file at once bundles everything into a single .zip built server-side, instead of one browser download per file.',
+      'A prompt with no rendered audio yet for a given language is reported clearly rather than producing an empty or corrupt file.',
+      'Import is unchanged and still reads the earlier JSON export shape, for moving prompts between orgs.',
+    ],
+  },
+  {
+    date: '2026-08-17',
+    title: 'Bulk Default Scripts editor for Queues',
+    items: [
+      'New "Edit Default Scripts…" button alongside the SLA editor: pick a default Script per media type and apply it across one or many selected queues at once.',
+      'Shows "Mixed across selected queues" when the current default varies, and requires an explicit choice before applying.',
+    ],
+  },
+  {
+    date: '2026-08-16',
+    title: 'In-app Release Notes',
+    items: [
+      'This tab — a running, dated log of what\'s shipped, kept in sync with the toolkit\'s own history.',
+    ],
+  },
   {
     date: '2026-08-15',
     title: 'Disconnect Interaction module',

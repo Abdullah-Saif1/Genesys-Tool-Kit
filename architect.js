@@ -1,4 +1,5 @@
 const express = require('express');
+const archiver = require('archiver');
 
 // ---------------------------------------------------------------------------
 // Hand-authored flow templates (curated templates + AI fills the blanks).
@@ -619,6 +620,105 @@ module.exports = function createArchitectRouter({ getValidToken, saveSession, RE
     } catch (err) {
       sendError(res, err);
     }
+  });
+
+  // Fetches the actual audio bytes for one prompt/language — the same file Genesys Cloud's own
+  // "download" action on a prompt resource gives you, not a re-implementation of it. The
+  // resource's `mediaUri` is fetched fresh each time (proxied through here rather than exposed
+  // to the browser directly) since `gcRequest` only ever returns parsed JSON and can't relay
+  // binary audio, and `mediaUri` itself may be a short-lived signed URL. Shared by the
+  // single-file route and the zip route below so the mediaUri-resolution logic lives in one place.
+  async function fetchPromptAudioBuffer(req, promptId, language) {
+    const resource = await gcRequest(
+      req,
+      'GET',
+      `/api/v2/architect/prompts/${encodeURIComponent(promptId)}/resources/${encodeURIComponent(language)}`
+    );
+    const mediaUri = resource && resource.mediaUri;
+    if (!mediaUri) {
+      const err = new Error('No audio file is available for this language yet (it may be text-only TTS with nothing rendered, or still processing).');
+      err.status = 404;
+      throw err;
+    }
+
+    const auth = await getValidToken(req);
+    const regionInfo = REGIONS[auth.region];
+    const resolvedUrl = /^https?:\/\//i.test(mediaUri) ? mediaUri : `https://${regionInfo.apiHost}${mediaUri}`;
+    const audioResp = await fetch(resolvedUrl, { headers: { Authorization: `Bearer ${auth.accessToken}` } });
+    if (!audioResp.ok) {
+      const err = new Error(`Could not download audio (HTTP ${audioResp.status})`);
+      err.status = audioResp.status;
+      throw err;
+    }
+
+    return { buffer: Buffer.from(await audioResp.arrayBuffer()), contentType: audioResp.headers.get('content-type') || 'audio/wav' };
+  }
+
+  router.get('/prompts/:id/resources/:language/audio', requireGenesysAuth, async (req, res) => {
+    try {
+      const { buffer, contentType } = await fetchPromptAudioBuffer(req, req.params.id, req.params.language);
+      res.set('Content-Type', contentType);
+      res.set('Content-Disposition', 'attachment');
+      res.send(buffer);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Bundles several prompt/language audio files into a single .zip so selecting many prompts
+  // downloads one archive instead of triggering a separate browser download per file. Each
+  // requested file is fetched independently; one missing/failed file doesn't abort the others —
+  // it's just left out, and the summary of what made it in/failed comes back in a trailing
+  // header the client reads before the streamed zip body.
+  router.post('/prompts/audio-zip', requireGenesysAuth, async (req, res) => {
+    const { items, zipFilename } = req.body || {};
+    if (!Array.isArray(items) || !items.length) {
+      return res.status(400).json({ error: 'items (array of { promptId, promptName, language }) is required' });
+    }
+
+    const results = [];
+    const fetched = [];
+    const usedNames = new Set(); // guards against two prompts sanitizing to the same zip entry name
+    for (const item of items) {
+      const { promptId, promptName, language } = item || {};
+      if (!promptId || !language) continue;
+      try {
+        const { buffer } = await fetchPromptAudioBuffer(req, promptId, language);
+        let name = `${(promptName || promptId).replace(/[^a-z0-9-]+/gi, '_')}_${language}.wav`;
+        let n = 2;
+        while (usedNames.has(name)) {
+          name = `${(promptName || promptId).replace(/[^a-z0-9-]+/gi, '_')}_${language}_${n}.wav`;
+          n += 1;
+        }
+        usedNames.add(name);
+        fetched.push({ buffer, name });
+        results.push({ label: `${promptName || promptId} (${language})`, ok: true });
+      } catch (err) {
+        results.push({ label: `${promptName || promptId} (${language})`, ok: false, message: err.message });
+      }
+    }
+
+    if (!fetched.length) {
+      return res.status(404).json({ error: 'No audio could be downloaded for any of the requested prompts/languages.', results });
+    }
+
+    res.set('Content-Type', 'application/zip');
+    res.set('Content-Disposition', `attachment; filename="${(zipFilename || 'prompts-audio').replace(/[^a-z0-9-]+/gi, '_')}.zip"`);
+    // Results travel as a response header (base64 JSON, since header values can't contain raw
+    // newlines/unicode safely) rather than in the body, which is the zip binary itself.
+    res.set('X-Export-Results', Buffer.from(JSON.stringify(results)).toString('base64'));
+    res.set('Access-Control-Expose-Headers', 'X-Export-Results');
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', (err) => {
+      // Headers are already sent by the time archiver can fail mid-stream; end the response
+      // rather than trying to send a JSON error onto a response that's already committed to zip.
+      console.error('[architect] zip stream error:', err);
+      res.end();
+    });
+    archive.pipe(res);
+    fetched.forEach((f) => archive.append(f.buffer, { name: f.name }));
+    archive.finalize();
   });
 
   // ---- AI provider API key settings (session-scoped only, never written to disk) ----
