@@ -667,6 +667,7 @@ function closeOverlays() {
   document.getElementById('promptModalOverlay').classList.add('hidden');
   document.getElementById('evalFormModalOverlay').classList.add('hidden');
   document.getElementById('queueSlaModalOverlay').classList.add('hidden');
+  document.getElementById('queueScriptsModalOverlay').classList.add('hidden');
 }
 
 document.getElementById('paletteInput').addEventListener('input', renderPalette);
@@ -1621,6 +1622,10 @@ async function refreshManagedQueuePanels() {
   slaEditBtn.classList.toggle('hidden', queueIds.length === 0);
   slaEditBtn.textContent = queueIds.length === 1 ? 'Edit SLA / Service Level…' : `Edit SLA / Service Level (${queueIds.length})…`;
 
+  const scriptsEditBtn = document.getElementById('queueScriptsEditBtn');
+  scriptsEditBtn.classList.toggle('hidden', queueIds.length === 0);
+  scriptsEditBtn.textContent = queueIds.length === 1 ? 'Edit Default Scripts…' : `Edit Default Scripts (${queueIds.length})…`;
+
   if (queueIds.length === 0) {
     summary.textContent = 'Select a queue';
     meta.textContent = 'Click a queue on the left to manage it (select several to bulk-assign).';
@@ -2393,6 +2398,221 @@ document.getElementById('queueSlaBackBtn').addEventListener('click', () => {
 document.getElementById('queueSlaConfirmBtn').addEventListener('click', confirmQueueSlaApply);
 document.getElementById('queueSlaModalOverlay').addEventListener('click', (e) => {
   if (e.target.id === 'queueSlaModalOverlay') document.getElementById('queueSlaModalOverlay').classList.add('hidden');
+});
+
+// ---- Queue Default Scripts bulk edit ---------------------------------------
+// Each queue can have a default Script per media type (the script an agent's UI loads for an
+// interaction on that queue) -- Genesys models this as `defaultScripts`, a media-type-keyed map
+// living directly on the Queue resource, the same shape as `mediaSettings`. Unlike SLA, a script
+// assignment doesn't require the media type to already exist in `mediaSettings` first, so there's
+// no "opt in to create" step here -- a checked row just applies to every selected queue.
+// NOTE: the PATCH shape below (`{ defaultScripts: { <mediaType>: { id } | null } }`) is the
+// best-informed guess from the Queue resource schema, not verified live -- same caveat as the
+// Analytics query in the Interactions module before it was corrected against a real org.
+
+let allScriptsCache = []; // {id, name}
+
+async function loadAllScriptsCache() {
+  allScriptsCache = [];
+  let pageNumber = 1;
+  const pageSize = 200;
+  const maxPages = 10;
+  let total = Infinity;
+  while ((pageNumber - 1) * pageSize < total && pageNumber <= maxPages) {
+    const data = await proxy('GET', '/api/v2/scripts', { query: { pageNumber, pageSize } });
+    total = data.total || 0;
+    allScriptsCache = allScriptsCache.concat(data.entities || []);
+    pageNumber += 1;
+  }
+  allScriptsCache.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
+let queueScriptsFullQueues = [];
+let queueScriptsRowState = []; // [{ key, label, checkbox, select }]
+let queueScriptsPendingChanges = null;
+
+function setQueueScriptsView(mode) {
+  document.getElementById('queueScriptsEditView').classList.toggle('hidden', mode !== 'edit');
+  document.getElementById('queueScriptsReviewView').classList.toggle('hidden', mode !== 'review');
+  document.getElementById('queueScriptsApplyBtn').classList.toggle('hidden', mode !== 'edit');
+  document.getElementById('queueScriptsBackBtn').classList.toggle('hidden', mode !== 'review');
+  document.getElementById('queueScriptsConfirmBtn').classList.toggle('hidden', mode !== 'review');
+}
+
+async function openQueueScriptsModal() {
+  const queueIds = getSelectedQueueIds();
+  if (!queueIds.length) { showToast('Select at least one queue first.', true); return; }
+
+  showError('queueScriptsModalError', '');
+  document.getElementById('queueScriptsResults').innerHTML = '';
+  document.getElementById('queueScriptsReviewBody').innerHTML = '';
+  queueScriptsPendingChanges = null;
+  setQueueScriptsView('edit');
+
+  const names = getSelectedQueueNames();
+  document.getElementById('queueScriptsModalTitle').textContent =
+    queueIds.length === 1 ? `Default Scripts — ${names[0]}` : `Default Scripts — ${queueIds.length} queues`;
+  document.getElementById('queueScriptsModalSub').textContent = names.join(', ');
+
+  const body = document.getElementById('queueScriptsModalBody');
+  body.innerHTML = '';
+  body.appendChild(el('div', { class: 'sub', text: 'Loading current settings…' }));
+  document.getElementById('queueScriptsModalOverlay').classList.remove('hidden');
+
+  try {
+    const [fullQueues] = await Promise.all([
+      Promise.all(queueIds.map((id) => proxy('GET', `/api/v2/routing/queues/${id}`))),
+      allScriptsCache.length ? Promise.resolve() : loadAllScriptsCache(),
+    ]);
+    queueScriptsFullQueues = fullQueues;
+    renderQueueScriptsModalBody();
+  } catch (err) {
+    body.innerHTML = '';
+    showError('queueScriptsModalError', err.message);
+  }
+}
+
+function scriptNameFor(ref) {
+  if (!ref) return null;
+  if (ref.name) return ref.name;
+  const found = allScriptsCache.find((s) => s.id === ref.id);
+  return found ? found.name : ref.id;
+}
+
+function renderQueueScriptsModalBody() {
+  const body = document.getElementById('queueScriptsModalBody');
+  body.innerHTML = '';
+  queueScriptsRowState = [];
+
+  const keysSet = new Set();
+  queueScriptsFullQueues.forEach((q) => {
+    Object.keys(q.mediaSettings || {}).forEach((k) => keysSet.add(k));
+    Object.keys(q.defaultScripts || {}).forEach((k) => keysSet.add(k));
+  });
+  const orderedKeys = orderMediaTypeKeys([...keysSet]);
+
+  if (!orderedKeys.length) {
+    body.appendChild(
+      el('div', { class: 'sla-media-row empty-state', text: 'None of the selected queues have any media types configured yet.' })
+    );
+    return;
+  }
+
+  orderedKeys.forEach((key) => {
+    const configuredCount = queueScriptsFullQueues.filter((q) => q.mediaSettings && q.mediaSettings[key]).length;
+    const scriptIds = new Set(queueScriptsFullQueues.map((q) => (q.defaultScripts && q.defaultScripts[key] && q.defaultScripts[key].id) || ''));
+    const mixed = scriptIds.size > 1;
+    const uniformId = mixed ? '' : [...scriptIds][0];
+
+    const checkbox = el('input', { type: 'checkbox' });
+    const select = el('select', { class: 'text-input', disabled: 'disabled' });
+    if (mixed) select.appendChild(el('option', { value: '__mixed__', text: 'Mixed across selected queues — choose to overwrite' }));
+    select.appendChild(el('option', { value: '__none__', text: 'No default script' }));
+    allScriptsCache.forEach((s) => select.appendChild(el('option', { value: s.id, text: s.name })));
+    select.value = mixed ? '__mixed__' : uniformId || '__none__';
+
+    checkbox.addEventListener('change', () => { select.disabled = !checkbox.checked; });
+
+    const badge =
+      configuredCount > 0 && configuredCount < queueScriptsFullQueues.length
+        ? el('span', { class: 'sla-badge', text: `${configuredCount}/${queueScriptsFullQueues.length} configured` })
+        : null;
+    const labelChildren = [checkbox, el('span', {}, [document.createTextNode(mediaTypeLabel(key))])];
+    if (badge) labelChildren.push(badge);
+
+    body.appendChild(
+      el('div', { class: 'sla-media-row' }, [
+        el('label', { class: 'sla-media-label' }, labelChildren),
+        el('div', { class: 'sla-field sla-field-wide' }, [el('span', { text: 'Default script' }), select]),
+      ])
+    );
+
+    queueScriptsRowState.push({ key, label: mediaTypeLabel(key), checkbox, select });
+  });
+}
+
+function collectQueueScriptsChanges() {
+  const changes = [];
+  for (const row of queueScriptsRowState) {
+    if (!row.checkbox.checked) continue;
+    if (row.select.value === '__mixed__') {
+      return { ok: false, error: `${row.label}: choose a script (or "No default script") — it currently varies across the selected queues.` };
+    }
+    changes.push({ key: row.key, label: row.label, scriptId: row.select.value === '__none__' ? null : row.select.value, scriptName: row.select.value === '__none__' ? null : row.select.options[row.select.selectedIndex].text });
+  }
+  if (!changes.length) return { ok: false, error: 'Check at least one media type to apply changes to.' };
+  return { ok: true, changes };
+}
+
+function renderQueueScriptsReview(changes) {
+  const container = document.getElementById('queueScriptsReviewBody');
+  container.innerHTML = '';
+
+  const table = el('table', { class: 'sla-review-table' });
+  const thead = el('thead', {}, [el('tr', {}, ['Queue', 'Media type', 'Default script'].map((h) => el('th', { text: h })))]);
+  const tbody = el('tbody');
+
+  changes.forEach((c) => {
+    queueScriptsFullQueues.forEach((q) => {
+      const oldName = scriptNameFor(q.defaultScripts && q.defaultScripts[c.key]) || 'No default script';
+      const newName = c.scriptName || 'No default script';
+      tbody.appendChild(
+        el('tr', {}, [
+          el('td', { text: q.name }),
+          el('td', { text: c.label }),
+          el('td', { text: oldName === newName ? `${newName} (unchanged)` : `${oldName} → ${newName}` }),
+        ])
+      );
+    });
+  });
+
+  table.appendChild(thead);
+  table.appendChild(tbody);
+  container.appendChild(table);
+}
+
+async function confirmQueueScriptsApply() {
+  if (!queueScriptsPendingChanges || !queueScriptsPendingChanges.length) return;
+  const btn = document.getElementById('queueScriptsConfirmBtn');
+  await withBusy(btn, 'Applying…', async () => {
+    const results = [];
+    for (const q of queueScriptsFullQueues) {
+      try {
+        const defaultScripts = Object.assign({}, q.defaultScripts);
+        queueScriptsPendingChanges.forEach((c) => {
+          defaultScripts[c.key] = c.scriptId ? { id: c.scriptId } : null;
+        });
+        await proxy('PATCH', `/api/v2/routing/queues/${q.id}`, { body: { defaultScripts } });
+        results.push({ ok: true, label: q.name });
+      } catch (err) {
+        results.push({ ok: false, label: q.name, message: err.message });
+      }
+    }
+    renderBulkResults('queueScriptsResults', results);
+    const okCount = results.filter((r) => r.ok).length;
+    showToast(`${okCount} of ${results.length} queue(s) updated.`, okCount < results.length);
+    if (okCount) await refreshManagedQueuePanels();
+  });
+}
+
+document.getElementById('queueScriptsEditBtn').addEventListener('click', openQueueScriptsModal);
+document.getElementById('queueScriptsCancelBtn').addEventListener('click', () => document.getElementById('queueScriptsModalOverlay').classList.add('hidden'));
+document.getElementById('queueScriptsApplyBtn').addEventListener('click', () => {
+  const result = collectQueueScriptsChanges();
+  if (!result.ok) { showError('queueScriptsModalError', result.error); return; }
+  showError('queueScriptsModalError', '');
+  document.getElementById('queueScriptsResults').innerHTML = '';
+  queueScriptsPendingChanges = result.changes;
+  renderQueueScriptsReview(queueScriptsPendingChanges);
+  setQueueScriptsView('review');
+});
+document.getElementById('queueScriptsBackBtn').addEventListener('click', () => {
+  queueScriptsPendingChanges = null;
+  setQueueScriptsView('edit');
+});
+document.getElementById('queueScriptsConfirmBtn').addEventListener('click', confirmQueueScriptsApply);
+document.getElementById('queueScriptsModalOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'queueScriptsModalOverlay') document.getElementById('queueScriptsModalOverlay').classList.add('hidden');
 });
 
 // ---- Interactions (disconnect live interactions) ---------------------------

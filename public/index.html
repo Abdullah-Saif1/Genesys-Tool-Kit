@@ -181,6 +181,7 @@
                     </div>
                     <div style="display:flex;gap:8px;flex:none">
                       <button id="queueSlaEditBtn" class="btn btn-subtle hidden" style="padding:8px 14px;font-size:12px"></button>
+                      <button id="queueScriptsEditBtn" class="btn btn-subtle hidden" style="padding:8px 14px;font-size:12px"></button>
                       <button id="queuesDeleteSelectedBtn" class="btn btn-danger hidden" style="padding:8px 14px;font-size:12px"></button>
                     </div>
                   </div>
@@ -664,6 +665,39 @@
           <button id="queueSlaBackBtn" class="btn btn-outline hidden">&larr; Back</button>
           <button id="queueSlaApplyBtn" class="btn btn-accent">Review changes</button>
           <button id="queueSlaConfirmBtn" class="btn btn-accent hidden">Confirm &amp; apply</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Queue Default Scripts bulk-edit modal ===== -->
+    <div id="queueScriptsModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card xwide">
+        <div class="modal-head">
+          <div class="title" id="queueScriptsModalTitle">Default Scripts</div>
+          <div class="sub" id="queueScriptsModalSub"></div>
+        </div>
+        <div class="modal-body">
+          <div id="queueScriptsEditView">
+            <p class="sub" style="font-size:12px;color:var(--text-faint)">
+              Check a media type to change its default script &mdash; unchecked types are left exactly as they are.
+              Applies the same choice across every selected queue.
+            </p>
+            <div id="queueScriptsModalBody"></div>
+          </div>
+
+          <div id="queueScriptsReviewView" class="hidden">
+            <p class="sub" style="font-size:12px;color:var(--text-faint)">Review the changes below, then confirm to apply them.</p>
+            <div id="queueScriptsReviewBody" class="sla-review-table-wrap"></div>
+          </div>
+
+          <div id="queueScriptsResults" class="bulk-results"></div>
+        </div>
+        <div class="modal-foot">
+          <span class="field-inline-error hidden" id="queueScriptsModalError" style="margin-right:auto"></span>
+          <button id="queueScriptsCancelBtn" class="btn btn-outline">Cancel</button>
+          <button id="queueScriptsBackBtn" class="btn btn-outline hidden">&larr; Back</button>
+          <button id="queueScriptsApplyBtn" class="btn btn-accent">Review changes</button>
+          <button id="queueScriptsConfirmBtn" class="btn btn-accent hidden">Confirm &amp; apply</button>
         </div>
       </div>
     </div>

@@ -480,6 +480,9 @@ input, select, textarea, button { font-family: inherit; }
 .sla-media-row .sla-field { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); }
 .sla-media-row .sla-field input { width: 66px; padding: 6px 8px; }
 .sla-media-row .sla-field input:disabled { opacity: .5; }
+.sla-media-row .sla-field.sla-field-wide { flex: 1; min-width: 200px; }
+.sla-media-row .sla-field select { flex: 1; min-width: 0; padding: 6px 8px; }
+.sla-media-row .sla-field select:disabled { opacity: .5; }
 .sla-media-row.empty-state { color: var(--text-faint); font-size: 12.5px; justify-content: center; }
 .sla-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; background: var(--content-bg); color: var(--text-faint); font-weight: 600; }
 .sla-badge.new { background: var(--accent-tint-bg); color: var(--accent-tint-text); }
