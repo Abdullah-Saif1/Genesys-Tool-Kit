@@ -290,8 +290,19 @@
               </select>
             </div>
             <p id="usersTotal" class="users-total"></p>
-            <div class="grid-table" style="grid-template-columns:1.4fr 1.8fr 1.2fr .8fr;margin-bottom:12px">
-              <div class="grid-head" style="grid-template-columns:1.4fr 1.8fr 1.2fr .8fr">Name<span>Email</span><span>Title</span><span>State</span></div>
+            <div class="toolbar-row" style="margin-bottom:10px">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-faint);cursor:pointer">
+                <input type="checkbox" id="usersSelectAll" class="list-row-checkbox" />
+                Select all loaded
+              </label>
+              <button id="usersBulkEditEmailsBtn" class="btn btn-subtle">Bulk edit emails&hellip;</button>
+            </div>
+            <div id="usersBulkBar" class="bulk-bar hidden" style="margin-bottom:10px">
+              <span class="count" id="usersBulkCount"></span>
+              <button id="usersClearSelectedBtn" class="btn btn-subtle">Clear</button>
+            </div>
+            <div class="grid-table" style="grid-template-columns:auto 1.4fr 1.8fr 1.2fr .8fr;margin-bottom:12px">
+              <div class="grid-head" style="grid-template-columns:auto 1.4fr 1.8fr 1.2fr .8fr"><span></span>Name<span>Email</span><span>Title</span><span>State</span></div>
               <div id="usersTableBody"></div>
             </div>
             <button id="usersLoadMoreBtn" class="btn btn-outline hidden" style="margin-bottom:22px">Load more</button>
@@ -704,6 +715,52 @@
           <button id="queueScriptsBackBtn" class="btn btn-outline hidden">&larr; Back</button>
           <button id="queueScriptsApplyBtn" class="btn btn-accent">Review changes</button>
           <button id="queueScriptsConfirmBtn" class="btn btn-accent hidden">Confirm &amp; apply</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Bulk edit user emails modal ===== -->
+    <div id="usersEmailModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card xwide">
+        <div class="modal-head">
+          <div class="title">Bulk edit emails</div>
+          <div class="sub">Updates each user's profile email in Genesys Cloud &mdash; not their login username, which is separate and unaffected.</div>
+        </div>
+        <div class="modal-body">
+          <div class="segmented" id="usersEmailModeSegment">
+            <div class="segment active" data-mode="domain">Change domain</div>
+            <div class="segment" data-mode="mapping">Mapping list</div>
+          </div>
+
+          <!-- Domain mode: applies to the users currently checked in the list behind this modal -->
+          <div id="usersEmailDomainView">
+            <p class="usage-note" id="usersEmailDomainSelectionNote"></p>
+            <div class="toolbar-row" style="margin-top:10px">
+              <input type="text" id="usersEmailOldDomain" class="text-input" placeholder="Old domain, e.g. oldco.com" />
+              <input type="text" id="usersEmailNewDomain" class="text-input" placeholder="New domain, e.g. newco.com" />
+              <button id="usersEmailDomainPreviewBtn" class="btn btn-subtle">Preview</button>
+            </div>
+            <div id="usersEmailDomainPreview" class="sla-review-table-wrap"></div>
+          </div>
+
+          <!-- Mapping mode: independent of the checked selection -- each line names its own target user -->
+          <div id="usersEmailMappingView" class="hidden">
+            <p class="usage-note">One mapping per line: <code>old@company.com, new@company.com</code> (comma, "-&gt;", or whitespace all work as the separator).</p>
+            <div class="toolbar-row" style="margin-top:6px">
+              <input type="file" id="usersEmailMappingFile" accept=".csv,.txt,text/plain,text/csv" class="hidden" />
+              <button id="usersEmailMappingUploadBtn" class="btn btn-subtle">&#8593; Upload file</button>
+            </div>
+            <textarea id="usersEmailMappingText" class="text-input" rows="8" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;margin-top:8px" placeholder="old1@company.com, new1@company.com&#10;old2@company.com, new2@company.com"></textarea>
+            <button id="usersEmailMappingPreviewBtn" class="btn btn-subtle" style="margin-top:10px">Preview</button>
+            <div id="usersEmailMappingPreview" class="sla-review-table-wrap"></div>
+          </div>
+
+          <div id="usersEmailResults" class="bulk-results"></div>
+        </div>
+        <div class="modal-foot">
+          <span class="field-inline-error hidden" id="usersEmailModalError" style="margin-right:auto"></span>
+          <button id="usersEmailModalCancelBtn" class="btn btn-outline">Cancel</button>
+          <button id="usersEmailModalApplyBtn" class="btn btn-accent">Apply</button>
         </div>
       </div>
     </div>

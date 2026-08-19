@@ -668,6 +668,7 @@ function closeOverlays() {
   document.getElementById('evalFormModalOverlay').classList.add('hidden');
   document.getElementById('queueSlaModalOverlay').classList.add('hidden');
   document.getElementById('queueScriptsModalOverlay').classList.add('hidden');
+  document.getElementById('usersEmailModalOverlay').classList.add('hidden');
 }
 
 document.getElementById('paletteInput').addEventListener('input', renderPalette);
@@ -2914,6 +2915,17 @@ document.getElementById('interactionsDisconnectAllBtn').addEventListener('click'
 
 let selectedDivisionFilter = ''; // division id, or '' for all
 
+const selectedUserIds = new Set();
+let usersVisibleIds = [];
+
+function renderUsersBulkBar() {
+  const ids = [...selectedUserIds];
+  document.getElementById('usersBulkBar').classList.toggle('hidden', ids.length === 0);
+  document.getElementById('usersBulkCount').textContent = `${ids.length} selected`;
+  document.getElementById('usersSelectAll').checked =
+    usersVisibleIds.length > 0 && usersVisibleIds.every((id) => selectedUserIds.has(id));
+}
+
 const usersResource = createListResource({
   path: '/api/v2/users',
   query: { expand: 'title' }, // "title" is omitted from the default list representation without this
@@ -2932,6 +2944,8 @@ const usersResource = createListResource({
   },
   onRender: (filtered, state) => {
     document.getElementById('usersTotal').textContent = `Showing ${filtered.length} of ${state.total} users loaded (${state.items.length} fetched so far)`;
+    usersVisibleIds = filtered.map((u) => u.id);
+    renderUsersBulkBar();
   },
   buildRow: (user) => {
     const activeState = user.state === 'active';
@@ -2942,13 +2956,280 @@ const usersResource = createListResource({
     });
     const nameLink = el('span', { class: 'user-drill-link', text: user.name });
     nameLink.addEventListener('click', () => openUserDetail(user));
-    return gridRow('1.4fr 1.8fr 1.2fr .8fr', [
+
+    const checkbox = el('input', { type: 'checkbox' });
+    checkbox.checked = selectedUserIds.has(user.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) selectedUserIds.add(user.id);
+      else selectedUserIds.delete(user.id);
+      renderUsersBulkBar();
+    });
+
+    return gridRow('auto 1.4fr 1.8fr 1.2fr .8fr', [
+      checkbox,
       el('div', {}, [nameLink]),
       cellText(user.email, 'muted'),
       cellText(user.title || '—', 'muted'),
       badge,
     ]);
   },
+});
+
+document.getElementById('usersSelectAll').addEventListener('change', (e) => {
+  if (e.target.checked) usersVisibleIds.forEach((id) => selectedUserIds.add(id));
+  else usersVisibleIds.forEach((id) => selectedUserIds.delete(id));
+  usersResource.render();
+});
+document.getElementById('usersClearSelectedBtn').addEventListener('click', () => {
+  selectedUserIds.clear();
+  usersResource.render();
+});
+
+// ---- Bulk edit user emails -------------------------------------------------
+// Two independent modes, since every user needs a distinct email so there's no single "target
+// value" to apply to a whole selection the way the Queue SLA/Default Scripts editors do:
+//  - Domain: applies to whatever's currently checked in the list, swapping the domain half of
+//    each user's current email. Users whose current email doesn't end in the given old domain
+//    are left out and called out in the preview, never guessed at.
+//  - Mapping list: fully independent of the checkbox selection -- each line names its own old
+//    email, which is resolved against the *entire* user directory (fetched fresh, not just
+//    whatever's paginated in on screen) rather than only the checked rows.
+// Both modes funnel into the same validated {user, newEmail} list and the same Apply/PATCH loop,
+// and both require an explicit Preview before Apply is even enabled, so nothing is ever sent to
+// Genesys without being reviewed first. Updates the profile `email` field on the Genesys User
+// resource; the login `username` is a separate, untouched field.
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+let usersEmailMode = 'domain'; // 'domain' | 'mapping'
+let usersEmailPendingChanges = null; // [{ user, newEmail }] set by Preview, consumed by Apply
+
+function setUsersEmailMode(mode) {
+  usersEmailMode = mode;
+  document.getElementById('usersEmailDomainView').classList.toggle('hidden', mode !== 'domain');
+  document.getElementById('usersEmailMappingView').classList.toggle('hidden', mode !== 'mapping');
+  document.querySelectorAll('#usersEmailModeSegment .segment').forEach((seg) => seg.classList.toggle('active', seg.dataset.mode === mode));
+  showError('usersEmailModalError', '');
+  usersEmailPendingChanges = null;
+}
+
+function openUsersEmailModal() {
+  document.getElementById('usersEmailResults').innerHTML = '';
+  document.getElementById('usersEmailDomainPreview').innerHTML = '';
+  document.getElementById('usersEmailMappingPreview').innerHTML = '';
+  document.getElementById('usersEmailOldDomain').value = '';
+  document.getElementById('usersEmailNewDomain').value = '';
+  document.getElementById('usersEmailMappingText').value = '';
+  usersEmailPendingChanges = null;
+  showError('usersEmailModalError', '');
+
+  const selectedCount = selectedUserIds.size;
+  document.getElementById('usersEmailDomainSelectionNote').textContent = selectedCount
+    ? `Applies to the ${selectedCount} user${selectedCount === 1 ? '' : 's'} currently selected in the list below.`
+    : 'Select one or more users in the list below first, then reopen this to change their domain — or switch to Mapping list, which doesn\'t need a selection.';
+
+  setUsersEmailMode(selectedCount ? 'domain' : 'mapping');
+  document.getElementById('usersEmailModalOverlay').classList.remove('hidden');
+}
+
+// Shared by both modes: validates every {user, newEmail} pair, drops any that are unchanged from
+// the user's current email (silently -- not an error, just nothing to do), and catches two
+// entries landing on the same new email before it ever reaches Genesys.
+function finalizeEmailChanges(rawChanges) {
+  const changes = [];
+  const seen = new Map(); // lowercased new email -> user name
+  for (const { user, newEmail } of rawChanges) {
+    const value = (newEmail || '').trim();
+    if (!value) continue;
+    if (!EMAIL_PATTERN.test(value)) return { ok: false, error: `${user.name}: "${value}" doesn't look like a valid email.` };
+    if (value.toLowerCase() === (user.email || '').toLowerCase()) continue; // unchanged, skip
+    const key = value.toLowerCase();
+    if (seen.has(key)) return { ok: false, error: `"${value}" would be set for both ${seen.get(key)} and ${user.name} — each user needs a distinct email.` };
+    seen.set(key, user.name);
+    changes.push({ user, newEmail: value });
+  }
+  return { ok: true, changes };
+}
+
+function renderUsersEmailPreviewTable(container, headers, rows) {
+  container.innerHTML = '';
+  const table = el('table', { class: 'sla-review-table' });
+  table.appendChild(el('thead', {}, [el('tr', {}, headers.map((h) => el('th', { text: h })))]));
+  const tbody = el('tbody');
+  rows.forEach((cells) => tbody.appendChild(el('tr', {}, cells.map((c) => el('td', { text: c })))));
+  table.appendChild(tbody);
+  container.appendChild(table);
+}
+
+// ---- Domain mode ----
+
+function previewUsersEmailDomainChange() {
+  showError('usersEmailModalError', '');
+  usersEmailPendingChanges = null;
+  const ids = [...selectedUserIds];
+  const users = usersResource.state.items.filter((u) => ids.includes(u.id));
+  const oldDomain = document.getElementById('usersEmailOldDomain').value.trim().replace(/^@/, '').toLowerCase();
+  const newDomain = document.getElementById('usersEmailNewDomain').value.trim().replace(/^@/, '').toLowerCase();
+
+  if (!users.length) return showError('usersEmailModalError', 'Select one or more users in the list first.');
+  if (!oldDomain || !newDomain) return showError('usersEmailModalError', 'Enter both the old and new domain.');
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(newDomain)) return showError('usersEmailModalError', `"${newDomain}" doesn't look like a valid domain.`);
+
+  const rawChanges = [];
+  const rows = [];
+  users.forEach((user) => {
+    const email = user.email || '';
+    const at = email.lastIndexOf('@');
+    const domain = at === -1 ? '' : email.slice(at + 1).toLowerCase();
+    if (domain !== oldDomain) {
+      rows.push([user.name, email || '—', 'doesn\'t match — skipped']);
+      return;
+    }
+    const newEmail = `${email.slice(0, at)}@${newDomain}`;
+    rows.push([user.name, email, newEmail]);
+    rawChanges.push({ user, newEmail });
+  });
+
+  renderUsersEmailPreviewTable(document.getElementById('usersEmailDomainPreview'), ['Name', 'Current email', 'New email'], rows);
+
+  const result = finalizeEmailChanges(rawChanges);
+  if (!result.ok) return showError('usersEmailModalError', result.error);
+  if (!result.changes.length) return showError('usersEmailModalError', 'No users match that domain, or all matches are already up to date.');
+  usersEmailPendingChanges = result.changes;
+}
+
+// ---- Mapping list mode ----
+
+function parseEmailMappingLine(line) {
+  const normalized = line.replace(/=>|->/g, ',').replace(/\s*,\s*/g, ',');
+  const parts = normalized.split(/[,\s]+/).filter(Boolean);
+  return { oldEmail: parts[0] || '', newEmail: parts[1] || '' };
+}
+
+function parseEmailMappingText(text) {
+  return text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => Object.assign({ raw: line }, parseEmailMappingLine(line)));
+}
+
+// Fetches the full user directory (every page, not just what's already loaded on screen) so a
+// mapping line can resolve against any user in the org regardless of what's been paginated in.
+async function fetchAllUsersForLookup() {
+  const all = [];
+  let pageNumber = 1;
+  const pageSize = 200;
+  const maxPages = 50;
+  let total = Infinity;
+  while ((pageNumber - 1) * pageSize < total && pageNumber <= maxPages) {
+    const data = await proxy('GET', '/api/v2/users', { query: { pageNumber, pageSize } });
+    total = data.total || 0;
+    all.push(...(data.entities || []));
+    if (!data.entities || !data.entities.length) break;
+    pageNumber += 1;
+  }
+  return all;
+}
+
+async function previewUsersEmailMapping() {
+  showError('usersEmailModalError', '');
+  usersEmailPendingChanges = null;
+  const entries = parseEmailMappingText(document.getElementById('usersEmailMappingText').value);
+  const previewEl = document.getElementById('usersEmailMappingPreview');
+  previewEl.innerHTML = '';
+  if (!entries.length) return showError('usersEmailModalError', 'Paste or upload at least one mapping.');
+
+  const btn = document.getElementById('usersEmailMappingPreviewBtn');
+  await withBusy(btn, 'Matching…', async () => {
+    let allUsers;
+    try {
+      allUsers = await fetchAllUsersForLookup();
+    } catch (err) {
+      showError('usersEmailModalError', `Could not load the user directory: ${err.message}`);
+      return;
+    }
+    const byEmail = new Map(allUsers.filter((u) => u.email).map((u) => [u.email.toLowerCase(), u]));
+
+    const rawChanges = [];
+    const rows = [];
+    entries.forEach(({ raw, oldEmail, newEmail }) => {
+      if (!oldEmail || !newEmail) {
+        rows.push([raw, 'could not parse this line', '—']);
+        return;
+      }
+      const user = byEmail.get(oldEmail.toLowerCase());
+      if (!user) {
+        rows.push([oldEmail, 'no user found with this email', '—']);
+        return;
+      }
+      rows.push([oldEmail, user.name, newEmail]);
+      rawChanges.push({ user, newEmail });
+    });
+
+    renderUsersEmailPreviewTable(previewEl, ['Old email', 'Matched user', 'New email'], rows);
+
+    const result = finalizeEmailChanges(rawChanges);
+    if (!result.ok) return showError('usersEmailModalError', result.error);
+    if (!result.changes.length) return showError('usersEmailModalError', 'Nothing to apply — no lines matched a user with a different email.');
+    usersEmailPendingChanges = result.changes;
+  });
+}
+
+// ---- Shared wiring ----
+
+document.getElementById('usersBulkEditEmailsBtn').addEventListener('click', openUsersEmailModal);
+document.querySelectorAll('#usersEmailModeSegment .segment').forEach((seg) => {
+  seg.addEventListener('click', () => setUsersEmailMode(seg.dataset.mode));
+});
+document.getElementById('usersEmailDomainPreviewBtn').addEventListener('click', previewUsersEmailDomainChange);
+document.getElementById('usersEmailMappingPreviewBtn').addEventListener('click', previewUsersEmailMapping);
+document.getElementById('usersEmailMappingUploadBtn').addEventListener('click', () => document.getElementById('usersEmailMappingFile').click());
+document.getElementById('usersEmailMappingFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  document.getElementById('usersEmailMappingText').value = await file.text();
+});
+document.getElementById('usersEmailModalCancelBtn').addEventListener('click', () => document.getElementById('usersEmailModalOverlay').classList.add('hidden'));
+document.getElementById('usersEmailModalOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'usersEmailModalOverlay') document.getElementById('usersEmailModalOverlay').classList.add('hidden');
+});
+
+document.getElementById('usersEmailModalApplyBtn').addEventListener('click', async () => {
+  if (!usersEmailPendingChanges || !usersEmailPendingChanges.length) {
+    showError('usersEmailModalError', 'Nothing to apply yet — run Preview first.');
+    return;
+  }
+  const count = usersEmailPendingChanges.length;
+  const ok = await confirmModal({
+    title: `Update ${count} user email${count === 1 ? '' : 's'}`,
+    message: `Change the profile email for ${count} user(s)? This does not affect their login username.`,
+    confirmLabel: 'Update',
+    danger: false,
+  });
+  if (!ok) return;
+
+  const btn = document.getElementById('usersEmailModalApplyBtn');
+  await withBusy(btn, 'Saving…', async () => {
+    const results = [];
+    for (const change of usersEmailPendingChanges) {
+      try {
+        await proxy('PATCH', `/api/v2/users/${change.user.id}`, { body: { email: change.newEmail } });
+        const idx = usersResource.state.items.findIndex((u) => u.id === change.user.id);
+        if (idx !== -1) usersResource.state.items[idx] = Object.assign({}, usersResource.state.items[idx], { email: change.newEmail });
+        results.push({ ok: true, label: `${change.user.name} → ${change.newEmail}` });
+      } catch (err) {
+        results.push({ ok: false, label: change.user.name, message: err.message });
+      }
+    }
+    renderBulkResults('usersEmailResults', results);
+    const okCount = results.filter((r) => r.ok).length;
+    showToast(`${okCount} of ${results.length} email(s) updated.`, okCount < results.length);
+    if (okCount) {
+      usersResource.render();
+      usersEmailPendingChanges = null;
+    }
+  });
 });
 
 document.getElementById('usersStateFilter').addEventListener('change', () => usersResource.render());
