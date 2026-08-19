@@ -5768,6 +5768,16 @@ async function loadAuditTab() {
 
 const RELEASE_NOTES = [
   {
+    date: '2026-08-19',
+    title: 'Bulk edit emails for Users',
+    items: [
+      'New "Bulk edit emails…" entry point on the Users tab, with two modes since every user needs a distinct email.',
+      'Change domain: applies to whichever users are checked in the list, swapping the domain half of each one\'s current email. Anyone whose current email doesn\'t match the given old domain is left out and called out in the preview.',
+      'Mapping list: paste or upload old-email/new-email pairs (one per line) — independent of the checkbox selection, resolved against the full user directory rather than only what\'s loaded on screen.',
+      'Both modes require an explicit Preview before Apply activates, validate for duplicate/invalid new emails, and update the profile email only — login username is untouched.',
+    ],
+  },
+  {
     date: '2026-08-17',
     title: 'Prompts now export as audio, not JSON',
     items: [
