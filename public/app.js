@@ -1,3 +1,10 @@
+// ---- icon set (inline SVG, replaces the emoji glyphs previously used on these buttons) --------
+
+const ICON_SUN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+const ICON_MOON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>';
+const ICON_DESKTOP = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+const ICON_MOBILE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg>';
+
 // ---- theme (dark mode) -------------------------------------------------
 
 const THEME_STORAGE_KEY = 'gct-theme';
@@ -11,8 +18,10 @@ function getEffectiveTheme() {
 function renderThemeToggle() {
   const isDark = getEffectiveTheme() === 'dark';
   const btn = document.getElementById('themeToggleBtn');
-  btn.textContent = isDark ? '☀️' : '🌙';
-  btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+  btn.innerHTML = isDark ? ICON_SUN : ICON_MOON;
+  const label = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
 }
 
 function applyTheme(theme) {
@@ -59,8 +68,10 @@ function getEffectiveLayout() {
 function renderLayoutToggle() {
   const isMobile = getEffectiveLayout() === 'mobile';
   const btn = document.getElementById('layoutToggleBtn');
-  btn.textContent = isMobile ? '🖥️' : '📱';
-  btn.title = isMobile ? 'Switch to desktop layout' : 'Switch to mobile layout';
+  btn.innerHTML = isMobile ? ICON_DESKTOP : ICON_MOBILE;
+  const label = isMobile ? 'Switch to desktop layout' : 'Switch to mobile layout';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
 }
 
 function closeSidebarDrawer() {
@@ -514,6 +525,14 @@ document.querySelectorAll('.nav-item').forEach((item) => {
 document.getElementById('logoutBtn').addEventListener('click', async () => {
   await fetch('/api/auth/logout', { method: 'POST' });
   setAuthenticated(false);
+});
+// role="button" + tabindex makes this focusable, but a div still needs Enter/Space wired up
+// manually to behave like a real button for keyboard users.
+document.getElementById('logoutBtn').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    e.target.click();
+  }
 });
 
 function setAuthenticated(isAuthenticated, region) {
