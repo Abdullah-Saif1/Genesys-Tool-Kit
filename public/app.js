@@ -443,7 +443,15 @@ const tabLoaders = {
   canned: loadCannedTab,
   wrapup: () => wrapupResource.reset(),
   queues: loadQueuesTab,
-  interactions: () => interactionQueuesResource.reset(),
+  interactions: () => {
+    if (!document.getElementById('interactionsFrom').value) {
+      const now = new Date();
+      const dayAgo = new Date(now.getTime() - 24 * 3600 * 1000);
+      document.getElementById('interactionsFrom').value = toDatetimeLocalValue(dayAgo);
+      document.getElementById('interactionsTo').value = toDatetimeLocalValue(now);
+    }
+    return interactionQueuesResource.reset();
+  },
   users: loadUsersAndDivisions,
   skills: () => skillsResource.reset(),
   architect: loadArchitectTab,
@@ -2626,8 +2634,6 @@ document.getElementById('queueScriptsModalOverlay').addEventListener('click', (e
 // per-participant PATCH endpoint — media-type-agnostic, so it works the same for calls, chats,
 // emails, messages, and callbacks without branching per media type.
 
-const INTERACTION_LOOKBACK_HOURS = 6; // keep in sync with the notice-box copy in index.html
-
 let currentInteractions = []; // [{ conversationId, queueId, queueName, mediaTypes, participantIds, participantSummary, startedAt }]
 const selectedInteractionIds = new Set(); // conversationIds checked in the results table
 
@@ -2756,11 +2762,85 @@ function extractInteractionFromAnalyticsConversation(conv, selectedQueueIds, que
   };
 }
 
+// Quick-fill presets for the From/To fields, adapted from the standard date-range-picker preset
+// set but trimmed to what actually fits Genesys's 31-day cap: "Previous 3 months" is dropped (way
+// over it), and the "by week" grouping options aren't included since those bucket a report into
+// weekly rows -- not meaningful for a plain from/to range. Week starts Monday.
+function computeInteractionsRangePreset(key) {
+  const now = new Date();
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const startOfWeek = (d) => {
+    const day = d.getDay(); // 0=Sun..6=Sat
+    const diff = (day === 0 ? -6 : 1) - day;
+    return startOfDay(new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff));
+  };
+
+  switch (key) {
+    case 'today':
+      return { from: startOfDay(now), to: now };
+    case 'yesterday': {
+      const start = startOfDay(now);
+      return { from: new Date(start.getTime() - 24 * 3600 * 1000), to: start };
+    }
+    case 'thisWeek':
+      return { from: startOfWeek(now), to: now };
+    case 'lastWeek': {
+      const start = startOfWeek(now);
+      return { from: new Date(start.getTime() - 7 * 24 * 3600 * 1000), to: start };
+    }
+    case 'previous7Days':
+      return { from: new Date(now.getTime() - 7 * 24 * 3600 * 1000), to: now };
+    case 'thisMonth':
+      return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: now };
+    case 'lastMonth':
+      return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), to: new Date(now.getFullYear(), now.getMonth(), 1) };
+    case 'previous30Days':
+      return { from: new Date(now.getTime() - 30 * 24 * 3600 * 1000), to: now };
+    default:
+      return null;
+  }
+}
+
+document.getElementById('interactionsRangePreset').addEventListener('change', (e) => {
+  const range = computeInteractionsRangePreset(e.target.value);
+  if (!range) return;
+  document.getElementById('interactionsFrom').value = toDatetimeLocalValue(range.from);
+  document.getElementById('interactionsTo').value = toDatetimeLocalValue(range.to);
+  showError('interactionsRangeError', '');
+});
+// Editing either field by hand after picking a preset makes the preset label stale, so drop back
+// to "Custom range" rather than keep showing a preset name that no longer matches the values.
+['interactionsFrom', 'interactionsTo'].forEach((id) => {
+  document.getElementById(id).addEventListener('input', () => {
+    document.getElementById('interactionsRangePreset').value = '';
+  });
+});
+
+// Genesys rejects this query outright if the interval exceeds 31 days ("You must specify a
+// search interval as part of your query that does not exceed 31 days") -- confirmed live, so the
+// From/To inputs are validated against that cap client-side before the request is even sent,
+// rather than always relying on the server round-trip to catch it.
+function interactionsIntervalFromInputs() {
+  const fromVal = document.getElementById('interactionsFrom').value;
+  const toVal = document.getElementById('interactionsTo').value;
+  if (!fromVal || !toVal) return { ok: false, error: 'Both From and To dates are required.' };
+  const from = new Date(fromVal);
+  const to = new Date(toVal);
+  if (from >= to) return { ok: false, error: 'The From date must be before the To date.' };
+  const spanDays = (to - from) / (24 * 3600 * 1000);
+  if (spanDays > 31) return { ok: false, error: `That range spans ${Math.ceil(spanDays)} days — Genesys caps this query at 31 days.` };
+  return { ok: true, interval: `${from.toISOString()}/${to.toISOString()}` };
+}
+
 async function loadActiveInteractions() {
   const queueIds = getSelectedInteractionQueueIds();
   if (!queueIds.length) { showToast('Select at least one queue first.', true); return; }
 
   showError('interactionsError', '');
+  showError('interactionsRangeError', '');
+  const rangeResult = interactionsIntervalFromInputs();
+  if (!rangeResult.ok) { showError('interactionsRangeError', rangeResult.error); return; }
+
   document.getElementById('interactionsResults').innerHTML = '';
   selectedInteractionIds.clear();
   currentInteractions = [];
@@ -2768,10 +2848,8 @@ async function loadActiveInteractions() {
 
   const btn = document.getElementById('interactionsLoadBtn');
   await withBusy(btn, 'Loading…', async () => {
-    const now = new Date();
-    const start = new Date(now.getTime() - INTERACTION_LOOKBACK_HOURS * 3600 * 1000);
     const body = {
-      interval: `${start.toISOString()}/${now.toISOString()}`,
+      interval: rangeResult.interval,
       order: 'desc',
       orderBy: 'conversationStart',
       paging: { pageSize: 100, pageNumber: 1 },
