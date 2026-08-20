@@ -2969,26 +2969,40 @@ async function loadActiveInteractions() {
 
   const btn = document.getElementById('interactionsLoadBtn');
   await withBusy(btn, 'Loading…', async () => {
-    const body = {
-      interval: rangeResult.interval,
-      order: 'desc',
-      orderBy: 'conversationStart',
-      paging: { pageSize: 100, pageNumber: 1 },
-      // queueId is a segment-level dimension, not a conversation-level one (a conversation can
-      // touch more than one queue across transfers) -- confirmed live: the API rejects it under
-      // conversationFilters with "not valid for field type [ConversationDetailDimension]".
-      segmentFilters: [
-        {
-          type: 'or',
-          predicates: queueIds.map((id) => ({ type: 'dimension', dimension: 'queueId', operator: 'matches', value: id })),
-        },
-      ],
-    };
+    // 100 is the max pageSize Genesys accepts on this endpoint -- it doesn't relax with a bigger
+    // number, it just clamps or 400s. A month-long window can easily hold more than 100
+    // conversations on a busy queue, so page 1 alone was silently dropping any still-open
+    // interaction that didn't happen to land in the first 100 (ordered by most-recently-started).
+    // Loop pages until one comes back short of a full page, i.e. the last page.
+    const pageSize = 100;
+    const MAX_PAGES = 20; // safety cap -- 2,000 conversations is far more than this tool should ever need
+    let allConversations = [];
     try {
-      const data = await proxy('POST', '/api/v2/analytics/conversations/details/query', { body });
+      for (let pageNumber = 1; pageNumber <= MAX_PAGES; pageNumber++) {
+        btn.textContent = pageNumber === 1 ? 'Loading…' : `Loading… (page ${pageNumber})`;
+        const body = {
+          interval: rangeResult.interval,
+          order: 'desc',
+          orderBy: 'conversationStart',
+          paging: { pageSize, pageNumber },
+          // queueId is a segment-level dimension, not a conversation-level one (a conversation can
+          // touch more than one queue across transfers) -- confirmed live: the API rejects it under
+          // conversationFilters with "not valid for field type [ConversationDetailDimension]".
+          segmentFilters: [
+            {
+              type: 'or',
+              predicates: queueIds.map((id) => ({ type: 'dimension', dimension: 'queueId', operator: 'matches', value: id })),
+            },
+          ],
+        };
+        const data = await proxy('POST', '/api/v2/analytics/conversations/details/query', { body });
+        const page = data.conversations || [];
+        allConversations = allConversations.concat(page);
+        if (page.length < pageSize) break; // short page — nothing more to fetch
+      }
       const queueNameById = {};
       interactionQueuesResource.state.items.forEach((q) => { queueNameById[q.id] = q.name; });
-      currentInteractions = (data.conversations || [])
+      currentInteractions = allConversations
         .filter((c) => !c.conversationEnd) // still in progress — the query also returns recently-ended ones
         .map((c) => extractInteractionFromAnalyticsConversation(c, queueIds, queueNameById));
       renderInteractionsTable();
