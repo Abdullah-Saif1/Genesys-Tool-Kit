@@ -230,9 +230,9 @@
           <!-- Interactions -->
           <section id="tab-interactions" class="tab-panel hidden">
             <div class="notice-box">
-              Disconnects live, in-progress interactions immediately &mdash; this cannot be undone. Interactions are
-              discovered via a rolling 6-hour Genesys Analytics query and only ones still in progress are shown;
-              an interaction that started more than 6 hours ago won't appear. Always double-check before confirming.
+              Disconnects live, in-progress interactions immediately &mdash; this cannot be undone. Pick a From/To
+              range below (Genesys caps it at 31 days) and only interactions still in progress within that window
+              are shown. Always double-check before confirming.
             </div>
 
             <div class="queue-layout">
@@ -250,7 +250,31 @@
                   <div id="interactionQueuesSelectionSummary" style="font-weight:600;font-size:14px">No queues selected</div>
                   <div id="interactionQueuesSelectionMeta" class="sub" style="font-size:12px;color:var(--text-faint);margin-top:2px"></div>
                   <div id="interactionQueuesSelectionMedia" class="sub" style="font-size:12px;color:var(--text-faint);margin-top:2px"></div>
-                  <button id="interactionsLoadBtn" class="btn btn-accent" style="margin-top:12px;width:100%">Load active interactions</button>
+                  <div class="field-label" style="margin-top:12px">Range preset</div>
+                  <select id="interactionsRangePreset" class="text-input">
+                    <option value="">Custom range&hellip;</option>
+                    <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="thisWeek">This week</option>
+                    <option value="lastWeek">Last week</option>
+                    <option value="previous7Days">Previous 7 days</option>
+                    <option value="thisMonth">This month</option>
+                    <option value="lastMonth">Last month</option>
+                    <option value="previous30Days">Previous 30 days</option>
+                  </select>
+                  <div class="audit-filter-grid" style="margin-top:12px">
+                    <div>
+                      <div class="field-label">From</div>
+                      <input type="datetime-local" id="interactionsFrom" class="text-input" />
+                    </div>
+                    <div>
+                      <div class="field-label">To</div>
+                      <input type="datetime-local" id="interactionsTo" class="text-input" />
+                    </div>
+                  </div>
+                  <p class="usage-note" style="margin-top:6px">Genesys caps this query at a 31-day span.</p>
+                  <p id="interactionsRangeError" class="field-inline-error hidden" style="margin-top:4px"></p>
+                  <button id="interactionsLoadBtn" class="btn btn-accent" style="margin-top:10px;width:100%">Load active interactions</button>
                 </div>
 
                 <div class="card card-pad">
