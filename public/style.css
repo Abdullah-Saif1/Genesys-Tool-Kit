@@ -80,6 +80,16 @@
 
 * { box-sizing: border-box; }
 
+/* Visible focus ring for keyboard navigation, on every interactive element. Uses :focus-visible
+   so mouse/touch clicks stay quiet and only keyboard (and assistive-tech) focus shows the ring. */
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, [tabindex]:focus-visible, .nav-item:focus-visible,
+.queue-list-item:focus-visible, .pick-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 html, body {
   margin: 0;
   height: 100%;
@@ -151,6 +161,25 @@ input, select, textarea, button { font-family: inherit; }
   border-radius: 9px; padding: 10px 12px; font-size: 11.5px; color: var(--accent-tint-text); line-height: 1.5;
 }
 .field-error { color: var(--danger); font-size: 12px; font-weight: 600; }
+
+/* ---- Alerts — for surfaced errors/warnings/info that deserve more than an inline field-error,
+   e.g. a failed load or a permission problem. Same anatomy as .notice-box (icon + message) but
+   with a color per severity so the message's weight is visible at a glance, not just readable. */
+.alert {
+  display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px;
+  border-radius: 9px; font-size: 12.5px; line-height: 1.5;
+}
+.alert svg { flex: none; margin-top: 1px; }
+.alert-title { display: block; font-weight: 700; margin-bottom: 2px; }
+.alert-danger { background: #fdeded; border: 1px solid #f6c6c9; color: #8a1c24; }
+.alert-warn { background: var(--accent-tint-bg); border: 1px solid var(--accent-tint-border); color: var(--accent-tint-text); }
+.alert-info { background: #eef4fb; border: 1px solid #cadcf0; color: #2a5c94; }
+:root[data-theme='dark'] .alert-danger { background: #3a1f1f; border-color: #6b3232; color: #ff9d9d; }
+:root[data-theme='dark'] .alert-info { background: #1c2b3a; border-color: #2f4a63; color: #8fbdea; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .alert-danger { background: #3a1f1f; border-color: #6b3232; color: #ff9d9d; }
+  :root:not([data-theme='light']) .alert-info { background: #1c2b3a; border-color: #2f4a63; color: #8fbdea; }
+}
 
 .btn {
   border: none; border-radius: 9px; padding: 11px 16px; font-weight: 600;
@@ -260,6 +289,15 @@ input, select, textarea, button { font-family: inherit; }
 .release-note-list li { margin-bottom: 4px; }
 
 .state-badge { border-radius: 14px; padding: 3px 9px; font-size: 11px; font-weight: 600; }
+
+/* ---- Badges ---- */
+.badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 20px; padding: 3px 9px 3px 7px; font-size: 11px; font-weight: 700; }
+.badge-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.badge-live { background: #fdeded; color: #b3232c; }
+.badge-live .badge-dot { background: #e5484d; animation: pulse-live 1.6s ease-in-out infinite; }
+:root[data-theme='dark'] .badge-live { background: #3a1f1f; color: #ff9d9d; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .badge-live { background: #3a1f1f; color: #ff9d9d; } }
+@keyframes pulse-live { 0%, 100% { box-shadow: 0 0 0 0 rgba(229, 72, 77, .5); } 50% { box-shadow: 0 0 0 4px rgba(229, 72, 77, 0); } }
 .chip { background: var(--chip-bg); border-radius: 16px; padding: 5px 11px; font-size: 11.5px; color: var(--text); }
 .chip-accent { background: var(--accent-tint-bg); border: 1px solid var(--accent-tint-border); color: var(--accent-tint-text); border-radius: 16px; padding: 5px 11px; font-size: 11.5px; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
