@@ -164,6 +164,17 @@ function showError(elementId, message) {
   node.classList.toggle('hidden', !message);
 }
 
+// Same show/hide/toggle contract as showError, but for the boxed .alert-danger elements (icon +
+// message) used where a plain inline error line isn't prominent enough — sets text on the child
+// <span id="{elementId}Text"> rather than the alert div itself, so the icon markup stays intact.
+function showAlertError(elementId, message) {
+  const node = document.getElementById(elementId);
+  const textNode = document.getElementById(`${elementId}Text`);
+  if (!node || !textNode) return;
+  textNode.textContent = message;
+  node.classList.toggle('hidden', !message);
+}
+
 let toastTimer;
 function showToast(message, isError) {
   const toast = document.getElementById('toast');
@@ -447,10 +458,54 @@ function createListResource({ path, query, pageSize = 50, containerId, filterId,
   return { state, reset, loadMore, prepend, remove, render };
 }
 
+// ---- Overview ----------------------------------------------------------
+
+// Lightweight counts only (pageSize:1 — the list endpoints return `.total` regardless of how many
+// entities are actually returned, so there's no need to pull full pages just for a number here).
+// Each call is independent so one failing endpoint (e.g. a missing scope) doesn't blank the rest.
+async function loadOverviewTab() {
+  showAlertError('overviewStatsError', '');
+  const stats = [
+    ['overviewStatQueues', '/api/v2/routing/queues'],
+    ['overviewStatWrapup', '/api/v2/routing/wrapupcodes'],
+    ['overviewStatEvalforms', '/api/v2/quality/forms/evaluations'],
+    ['overviewStatSchedules', '/api/v2/architect/schedules'],
+  ];
+  const failures = [];
+  await Promise.all(
+    stats.map(async ([elementId, path]) => {
+      const statEl = document.getElementById(elementId);
+      try {
+        const data = await proxy('GET', path, { query: { pageSize: 1, pageNumber: 1 } });
+        statEl.textContent = data.total != null ? data.total : '—';
+      } catch (err) {
+        statEl.textContent = '—';
+        failures.push(err.message);
+      } finally {
+        statEl.classList.remove('skeleton-text');
+      }
+    })
+  );
+  if (failures.length) showAlertError('overviewStatsError', `Some counts couldn't load: ${failures[0]}`);
+}
+
+document.getElementById('overviewActionDisconnect').addEventListener('click', () => setActiveTab('interactions'));
+document.getElementById('overviewActionCanned').addEventListener('click', () => { setActiveTab('canned'); openCreateModal('canned'); });
+document.getElementById('overviewActionQueues').addEventListener('click', () => setActiveTab('queues'));
+document.getElementById('overviewActionAudit').addEventListener('click', () => setActiveTab('audit'));
+document.querySelectorAll('.overview-action').forEach((card) => {
+  card.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+  });
+});
+
+document.getElementById('paletteTriggerBtn').addEventListener('click', () => openPalette());
+
 // ---- view / tab navigation ----------------------------------------------
 
 const lazyLoaded = new Set();
 const tabLoaders = {
+  overview: loadOverviewTab,
   canned: loadCannedTab,
   wrapup: () => wrapupResource.reset(),
   queues: loadQueuesTab,
@@ -474,6 +529,7 @@ const tabLoaders = {
 };
 
 const tabMeta = {
+  overview: { title: 'Overview', sub: 'A quick look at your org, and shortcuts to common actions', create: null, bulk: false },
   canned: { title: 'Canned Responses', sub: 'Reusable agent replies, organised by library', create: 'New response', bulk: true },
   wrapup: { title: 'Wrap-up Codes', sub: 'Disposition codes agents apply after an interaction', create: 'New code', bulk: true },
   queues: { title: 'Queues', sub: 'Select one or more queues to manage members, codes & libraries', create: 'New queue', bulk: false },
@@ -541,7 +597,7 @@ function setAuthenticated(isAuthenticated, region) {
 
   if (isAuthenticated) {
     document.getElementById('statusRegionLabel').textContent = region;
-    setActiveTab('canned');
+    setActiveTab('overview');
   } else {
     lazyLoaded.clear();
     allUsersCache = [];
@@ -646,9 +702,10 @@ async function checkStatus() {
 
 function paletteActions() {
   const nav = [
+    ['overview', 'Overview'],
     ['canned', 'Canned Responses'], ['wrapup', 'Wrap-up Codes'], ['queues', 'Queues'], ['interactions', 'Disconnect Interaction'],
     ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['schedules', 'Schedules'],
-    ['evalforms', 'Evaluation Forms'], ['explorer', 'API Explorer'], ['releasenotes', 'Release Notes'],
+    ['evalforms', 'Evaluation Forms'], ['audit', 'Audit Log'], ['explorer', 'API Explorer'], ['releasenotes', 'Release Notes'],
   ];
   const items = nav.map(([k, l]) => ({ label: `Go to ${l}`, tag: 'Navigate', icon: '→', iconBg: '#4b5b68', run: () => setActiveTab(k) }));
   items.unshift(
@@ -2823,7 +2880,7 @@ document.getElementById('interactionsRangePreset').addEventListener('change', (e
   if (!range) return;
   document.getElementById('interactionsFrom').value = toDatetimeLocalValue(range.from);
   document.getElementById('interactionsTo').value = toDatetimeLocalValue(range.to);
-  showError('interactionsRangeError', '');
+  showAlertError('interactionsRangeError', '');
 });
 // Editing either field by hand after picking a preset makes the preset label stale, so drop back
 // to "Custom range" rather than keep showing a preset name that no longer matches the values.
@@ -2853,10 +2910,10 @@ async function loadActiveInteractions() {
   const queueIds = getSelectedInteractionQueueIds();
   if (!queueIds.length) { showToast('Select at least one queue first.', true); return; }
 
-  showError('interactionsError', '');
-  showError('interactionsRangeError', '');
+  showAlertError('interactionsError', '');
+  showAlertError('interactionsRangeError', '');
   const rangeResult = interactionsIntervalFromInputs();
-  if (!rangeResult.ok) { showError('interactionsRangeError', rangeResult.error); return; }
+  if (!rangeResult.ok) { showAlertError('interactionsRangeError', rangeResult.error); return; }
 
   document.getElementById('interactionsResults').innerHTML = '';
   selectedInteractionIds.clear();
@@ -2889,7 +2946,7 @@ async function loadActiveInteractions() {
         .map((c) => extractInteractionFromAnalyticsConversation(c, queueIds, queueNameById));
       renderInteractionsTable();
     } catch (err) {
-      showError('interactionsError', err.message);
+      showAlertError('interactionsError', err.message);
     }
   });
 }
