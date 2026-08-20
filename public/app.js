@@ -2891,6 +2891,46 @@ document.getElementById('interactionsRangePreset').addEventListener('change', (e
   document.getElementById('interactionsTo').value = toDatetimeLocalValue(range.to);
   showAlertError('interactionsRangeError', '');
 });
+// ---- Month navigator — browse a calendar month at a time (‹ July 2026 ›) as an alternative to
+// the preset dropdown or typing From/To by hand. Every calendar month is <=31 days, so it's
+// always within Genesys's cap with no extra validation needed. "Next" is disabled once the
+// cursor reaches the current month -- there's never data beyond today to browse forward into.
+let interactionsMonthCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+function addMonths(date, n) {
+  return new Date(date.getFullYear(), date.getMonth() + n, 1);
+}
+
+function renderInteractionsMonthNav() {
+  document.getElementById('interactionsMonthLabel').textContent = interactionsMonthCursor.toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
+  const currentMonth = addMonths(new Date(), 0);
+  document.getElementById('interactionsMonthNextBtn').disabled = addMonths(interactionsMonthCursor, 1) > currentMonth;
+}
+
+function applyInteractionsMonthSelection() {
+  const from = interactionsMonthCursor;
+  const to = new Date(Math.min(addMonths(interactionsMonthCursor, 1).getTime(), Date.now()));
+  document.getElementById('interactionsFrom').value = toDatetimeLocalValue(from);
+  document.getElementById('interactionsTo').value = toDatetimeLocalValue(to);
+  document.getElementById('interactionsRangePreset').value = '';
+  showAlertError('interactionsRangeError', '');
+  renderInteractionsMonthNav();
+}
+
+document.getElementById('interactionsMonthPrevBtn').addEventListener('click', () => {
+  interactionsMonthCursor = addMonths(interactionsMonthCursor, -1);
+  applyInteractionsMonthSelection();
+});
+document.getElementById('interactionsMonthNextBtn').addEventListener('click', (e) => {
+  if (e.currentTarget.disabled) return;
+  interactionsMonthCursor = addMonths(interactionsMonthCursor, 1);
+  applyInteractionsMonthSelection();
+});
+renderInteractionsMonthNav();
+
 // Editing either field by hand after picking a preset makes the preset label stale, so drop back
 // to "Custom range" rather than keep showing a preset name that no longer matches the values.
 ['interactionsFrom', 'interactionsTo'].forEach((id) => {
