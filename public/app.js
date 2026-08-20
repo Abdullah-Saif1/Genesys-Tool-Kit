@@ -425,11 +425,18 @@ function createListResource({ path, query, pageSize = 50, containerId, filterId,
   }
 
   async function reset() {
-    showError(errorId, '');
+    showAlertError(errorId, '');
     state.items = [];
     state.pageNumber = 0;
     state.total = 0;
-    await fetchPage(1);
+    try {
+      await fetchPage(1);
+    } catch (err) {
+      // Previously only surfaced via the tab loader's toast (which fades in ~3s) — an inline,
+      // persistent error is more useful here since the list is left empty until the user retries.
+      showAlertError(errorId, err.message);
+      throw err;
+    }
   }
 
   async function loadMore() {
@@ -451,7 +458,7 @@ function createListResource({ path, query, pageSize = 50, containerId, filterId,
   if (filterId) document.getElementById(filterId).addEventListener('input', render);
   if (loadMoreId) {
     document.getElementById(loadMoreId).addEventListener('click', () => {
-      loadMore().catch((err) => showError(errorId, err.message));
+      loadMore().catch((err) => showAlertError(errorId, err.message));
     });
   }
 
@@ -1685,7 +1692,7 @@ async function loadQueuesTab() {
   if (!userDirectoryLoadStarted) {
     userDirectoryLoadStarted = true;
     withBusy(document.getElementById('membersLoadUsersBtn'), 'Loading…', loadUserDirectory).catch((err) =>
-      showError('membersError', err.message)
+      showAlertError('membersError', err.message)
     );
   }
 }
@@ -1736,9 +1743,9 @@ async function refreshManagedQueuePanels() {
     multiWrap.classList.add('hidden');
     membersCard.classList.remove('hidden');
     await Promise.all([
-      loadQueueMembers(queueIds[0]).catch((err) => showError('membersError', err.message)),
-      loadQueueWrapupCodes(queueIds[0]).catch((err) => showError('queueWrapupError', err.message)),
-      loadQueueLibraryConfig(queueIds[0]).catch((err) => showError('queueLibraryError', err.message)),
+      loadQueueMembers(queueIds[0]).catch((err) => showAlertError('membersError', err.message)),
+      loadQueueWrapupCodes(queueIds[0]).catch((err) => showAlertError('queueWrapupError', err.message)),
+      loadQueueLibraryConfig(queueIds[0]).catch((err) => showAlertError('queueLibraryError', err.message)),
     ]);
     return;
   }
@@ -1843,7 +1850,7 @@ function renderMemberChips(queueId) {
 }
 
 async function loadQueueMembers(queueId) {
-  showError('membersError', '');
+  showAlertError('membersError', '');
   const data = await proxy('GET', `/api/v2/routing/queues/${queueId}/members`, { query: { pageSize: 200 } });
   const members = data.entities || [];
   // QueueMember's "id" is documented as the member's user id; "user" may also be present when expanded.
@@ -1891,12 +1898,12 @@ async function loadUserDirectory() {
 }
 
 document.getElementById('membersLoadUsersBtn').addEventListener('click', async (e) => {
-  showError('membersError', '');
+  showAlertError('membersError', '');
   await withBusy(e.target, 'Loading…', async () => {
     try {
       await loadUserDirectory();
     } catch (err) {
-      showError('membersError', err.message);
+      showAlertError('membersError', err.message);
     }
   });
 });
@@ -1959,7 +1966,7 @@ function renderQueueWrapupChips(queueId) {
 }
 
 async function loadQueueWrapupCodes(queueId) {
-  showError('queueWrapupError', '');
+  showAlertError('queueWrapupError', '');
   const data = await proxy('GET', `/api/v2/routing/queues/${queueId}/wrapupcodes`, { query: { pageSize: 200 } });
   currentQueueWrapupList = (data.entities || []).map((c) => ({ id: c.id, name: c.name }));
   renderQueueWrapupChips(queueId);
@@ -2065,7 +2072,7 @@ function renderQueueSettings(queue) {
 }
 
 async function loadQueueLibraryConfig(queueId) {
-  showError('queueLibraryError', '');
+  showAlertError('queueLibraryError', '');
   const queue = await proxy('GET', `/api/v2/routing/queues/${queueId}`);
   const config = queue.cannedResponseLibraries || { mode: 'All', libraryIds: [] };
   currentQueueLibraryIds = config.libraryIds || [];
@@ -2085,7 +2092,7 @@ async function saveLibraryMode(queueIds, mode, libraryIds) {
 async function onLibraryModeClick(mode) {
   const queueIds = getSelectedQueueIds();
   if (!queueIds.length) { showToast('Select at least one queue first.', true); return; }
-  showError('queueLibraryError', '');
+  showAlertError('queueLibraryError', '');
   try {
     if (mode === 'Selected') {
       renderLibrarySegment('Selected');
@@ -2097,7 +2104,7 @@ async function onLibraryModeClick(mode) {
     renderLibraryChips();
     showToast(`Libraries set to "${mode}".`);
   } catch (err) {
-    showError('queueLibraryError', err.message);
+    showAlertError('queueLibraryError', err.message);
   }
 }
 
@@ -3801,7 +3808,7 @@ document.getElementById('explorerStarBtn').addEventListener('click', toggleExplo
 const EXPLORER_DESTRUCTIVE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
 document.getElementById('explorerSendBtn').addEventListener('click', async () => {
-  showError('explorerError', '');
+  showAlertError('explorerError', '');
   const method = document.getElementById('explorerMethod').value;
   const apiPath = document.getElementById('explorerPath').value.trim();
   if (!apiPath) { showToast('Enter an API path first', true); return; }
@@ -3814,7 +3821,7 @@ document.getElementById('explorerSendBtn').addEventListener('click', async () =>
     query = queryRaw ? JSON.parse(queryRaw) : undefined;
     body = bodyRaw ? JSON.parse(bodyRaw) : undefined;
   } catch (err) {
-    showError('explorerError', `Invalid JSON: ${err.message}`);
+    showAlertError('explorerError', `Invalid JSON: ${err.message}`);
     return;
   }
 
@@ -3861,11 +3868,11 @@ document.getElementById('explorerSendBtn').addEventListener('click', async () =>
     metaBox.appendChild(el('span', { class: 'pill', text: `${elapsedMs} ms` }));
     metaBox.classList.remove('hidden');
 
-    if (!resp.ok) showError('explorerError', (parsed && parsed.error) || 'Request failed.');
+    if (!resp.ok) showAlertError('explorerError', (parsed && parsed.error) || 'Request failed.');
 
     saveExplorerHistory([{ method, path: apiPath, query: queryRaw, body: bodyRaw, status: resp.status, timeMs: elapsedMs, at: Date.now() }, ...loadExplorerHistory()]);
   } catch (err) {
-    showError('explorerError', err.message);
+    showAlertError('explorerError', err.message);
     metaBox.classList.add('hidden');
   } finally {
     loading.classList.add('hidden');
@@ -5360,16 +5367,16 @@ document.getElementById('evalFormImportFile').addEventListener('change', async (
 
   const summaryEl = document.getElementById('evalFormsImportSummary');
   summaryEl.classList.add('hidden');
-  showError('evalFormsError', '');
+  showAlertError('evalFormsError', '');
 
   let parsed;
   try {
     parsed = JSON.parse(await file.text());
   } catch (err) {
-    return showError('evalFormsError', `Not valid JSON: ${err.message}`);
+    return showAlertError('evalFormsError', `Not valid JSON: ${err.message}`);
   }
   const forms = Array.isArray(parsed) ? parsed : [parsed];
-  if (!forms.length) return showError('evalFormsError', 'File has no forms to import.');
+  if (!forms.length) return showAlertError('evalFormsError', 'File has no forms to import.');
 
   const btn = document.getElementById('evalFormImportBtn');
   await withBusy(btn, 'Importing…', async () => {
@@ -5546,7 +5553,7 @@ async function fetchAuditResultsPage(transactionId, cursor) {
 }
 
 async function runAuditSearch() {
-  showError('auditError', '');
+  showAlertError('auditError', '');
   const statusEl = document.getElementById('auditSearchStatus');
   const btn = document.getElementById('auditSearchBtn');
 
@@ -5554,7 +5561,7 @@ async function runAuditSearch() {
   try {
     interval = auditIntervalFromInputs();
   } catch (err) {
-    return showError('auditError', err.message);
+    return showAlertError('auditError', err.message);
   }
 
   const body = { interval, filters: auditFiltersFromInputs(), sort: [{ name: 'Timestamp', sortOrder: 'descending' }] };
@@ -5575,7 +5582,7 @@ async function runAuditSearch() {
       await fetchAuditResultsPage(submitted.id, null);
     } catch (err) {
       statusEl.textContent = '';
-      showError('auditError', err.message);
+      showAlertError('auditError', err.message);
     }
   });
 }
@@ -5583,7 +5590,7 @@ async function runAuditSearch() {
 document.getElementById('auditSearchBtn').addEventListener('click', runAuditSearch);
 document.getElementById('auditLoadMoreBtn').addEventListener('click', () => {
   if (!auditState.transactionId || !auditState.cursor) return;
-  fetchAuditResultsPage(auditState.transactionId, auditState.cursor).catch((err) => showError('auditError', err.message));
+  fetchAuditResultsPage(auditState.transactionId, auditState.cursor).catch((err) => showAlertError('auditError', err.message));
 });
 
 async function loadAuditTab() {
