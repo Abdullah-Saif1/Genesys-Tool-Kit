@@ -110,6 +110,7 @@
           <div class="nav-group-title">Automation</div>
           <div class="nav-item" data-tab="architect">Architect</div>
           <div class="nav-item" data-tab="schedules">Schedules</div>
+          <div class="nav-item" data-tab="dataactions">Data Actions</div>
           <div class="nav-group-title">Compliance</div>
           <div class="nav-item" data-tab="evalforms">Evaluation Forms</div>
           <div class="nav-item" data-tab="audit">Audit Log</div>
@@ -555,6 +556,52 @@
             </div>
             <div id="schedulesError" class="alert alert-danger hidden" style="margin-top:10px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg><span id="schedulesErrorText"></span></div>
             <button id="schedulesLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+          </section>
+
+          <!-- Data Actions -->
+          <section id="tab-dataactions" class="tab-panel hidden">
+            <div class="notice-box" style="margin-bottom:14px">
+              Bulk export and import Integrations &rarr; Data Actions as JSON. A data action belongs to a specific
+              integration in this org, so <b>export always includes the source integration's name for reference,
+              and import always creates new actions attached to whichever integration you pick below</b> &mdash;
+              it never tries to guess or overwrite an existing one. The integration must already exist here before
+              you import.
+            </div>
+
+            <div class="toolbar-row" style="margin-bottom:12px">
+              <div style="flex:1;min-width:220px">
+                <div class="field-label">Import into integration</div>
+                <select id="dataActionsIntegrationSelect" class="text-input"><option value="">Loading integrations&hellip;</option></select>
+              </div>
+              <div style="align-self:flex-end;display:flex;gap:8px;flex-wrap:wrap">
+                <input type="file" id="dataActionsImportFile" accept="application/json" class="hidden" />
+                <button id="dataActionsImportBtn" class="btn btn-subtle">&#8593; Import</button>
+                <button id="dataActionsExportAllBtn" class="btn btn-subtle">&#8595; Export all</button>
+                <button id="dataActionsRefreshBtn" class="btn btn-subtle" title="Refresh">&#8635;</button>
+              </div>
+            </div>
+
+            <input type="search" id="dataActionsFilter" class="text-input" style="max-width:320px;padding:9px 12px;font-size:12.5px;margin-bottom:12px" placeholder="&#128269;  Filter by name&hellip;" />
+
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--text-faint);cursor:pointer">
+              <input type="checkbox" id="dataActionsSelectAll" class="list-row-checkbox" />
+              Select all loaded
+            </label>
+            <div id="dataActionsBulkBar" class="bulk-bar hidden" style="margin-bottom:10px">
+              <span class="count" id="dataActionsBulkCount"></span>
+              <button id="dataActionsExportSelectedBtn" class="btn btn-subtle">&#8595; Export selected</button>
+              <button id="dataActionsDeleteSelectedBtn" class="btn btn-subtle">Delete selected</button>
+              <button id="dataActionsClearSelectedBtn" class="btn btn-subtle">Clear</button>
+            </div>
+
+            <div class="grid-table" style="grid-template-columns:auto 1.6fr 1fr 1.4fr .7fr auto">
+              <div class="grid-head" style="grid-template-columns:auto 1.6fr 1fr 1.4fr .7fr auto"><span></span>Name<span>Category</span><span>Integration</span><span>Secure</span><span></span></div>
+              <div id="dataActionsTableBody"></div>
+              <p id="dataActionsEmpty" class="empty-note hidden">No data actions yet.</p>
+            </div>
+            <div id="dataActionsError" class="alert alert-danger hidden" style="margin-top:10px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg><span id="dataActionsErrorText"></span></div>
+            <button id="dataActionsLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+            <div id="dataActionsResults" class="bulk-results"></div>
           </section>
 
           <!-- Evaluation Forms -->

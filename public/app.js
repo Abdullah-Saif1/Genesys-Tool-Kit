@@ -529,6 +529,7 @@ const tabLoaders = {
   skills: () => skillsResource.reset(),
   architect: loadArchitectTab,
   schedules: () => schedulesResource.reset(),
+  dataactions: loadDataActionsTab,
   evalforms: () => evalFormsResource.reset(),
   audit: loadAuditTab,
   explorer: () => {},
@@ -545,6 +546,7 @@ const tabMeta = {
   skills: { title: 'Skills & Routing', sub: 'ACD skills used for skills-based routing', create: 'New skill', bulk: false },
   architect: { title: 'Architect', sub: 'Flows & prompts, and AI-assisted flow generation', create: null, bulk: false },
   schedules: { title: 'Schedules', sub: 'Time periods used by schedule groups and Architect flows', create: 'New schedule', bulk: false },
+  dataactions: { title: 'Data Actions', sub: 'Reusable custom REST/function calls invoked from Architect flows', create: null, bulk: false },
   evalforms: { title: 'Evaluation Forms', sub: 'QA scorecards used to evaluate recorded interactions', create: null, bulk: false },
   audit: { title: 'Audit Log', sub: 'Who changed what, and when', create: null, bulk: false },
   explorer: { title: 'API Explorer', sub: 'Direct access to any Genesys Cloud API v2 endpoint', create: null, bulk: false },
@@ -711,7 +713,7 @@ function paletteActions() {
   const nav = [
     ['overview', 'Overview'],
     ['canned', 'Canned Responses'], ['wrapup', 'Wrap-up Codes'], ['queues', 'Queues'], ['interactions', 'Disconnect Interaction'],
-    ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['schedules', 'Schedules'],
+    ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['schedules', 'Schedules'], ['dataactions', 'Data Actions'],
     ['evalforms', 'Evaluation Forms'], ['audit', 'Audit Log'], ['explorer', 'API Explorer'], ['releasenotes', 'Release Notes'],
   ];
   const items = nav.map(([k, l]) => ({ label: `Go to ${l}`, tag: 'Navigate', icon: '→', iconBg: '#4b5b68', run: () => setActiveTab(k) }));
@@ -4462,6 +4464,32 @@ function downloadBlob(filename, blob) {
   URL.revokeObjectURL(url);
 }
 
+// One item downloads directly as its own .json, unmodified; two or more stay as separate files
+// but are bundled into a single .zip via the generic /api/zip endpoint (built server-side with
+// archiver — the browser has no built-in way to zip several files together), so selecting many
+// items produces one download instead of one per file.
+async function downloadJsonAsZipOrSingle(items, zipFilename) {
+  if (!items.length) return;
+  if (items.length === 1) {
+    downloadJson(items[0].filename, items[0].data);
+    return;
+  }
+  const resp = await fetch('/api/zip', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      zipFilename,
+      files: items.map((it) => ({ name: it.filename, content: JSON.stringify(it.data, null, 2) })),
+    }),
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error || `Request failed (${resp.status})`);
+  }
+  const blob = await resp.blob();
+  downloadBlob(`${(zipFilename || 'export').replace(/[^a-z0-9-]+/gi, '_')}.zip`, blob);
+}
+
 
 async function fetchPromptWithResources(promptId) {
   return architectApi('GET', `/prompts/${encodeURIComponent(promptId)}${architectQueryString({ includeResources: true })}`);
@@ -4969,6 +4997,297 @@ async function loadArchitectTab() {
   await refreshArchitectKeyStatus();
   await Promise.all([resetArchitectFlows(), resetArchitectPrompts()]);
 }
+
+// ---- Data Actions ----------------------------------------------------------
+// Integrations -> Data Actions: reusable custom REST/function calls invoked from Architect flows.
+// A data action belongs to a specific integration in this org, so its integrationId carries no
+// meaning across orgs -- export includes the source integration's *name* purely for reference,
+// and import always creates new actions attached to an integration picked in THIS org first. It
+// never guesses a match or overwrites an existing action by name, same "always create" default as
+// Evaluation Forms import, since a data action can be live in production flows right now.
+// contract/config are round-tripped as opaque blobs (whatever GET returns is exactly what POST
+// gets sent back) rather than reconstructed field-by-field, since their nested shape (JSON
+// schemas, request/response templates) isn't something this app has verified in detail.
+
+let allIntegrationsCache = []; // {id, name}
+
+async function loadAllIntegrationsCache() {
+  allIntegrationsCache = [];
+  let pageNumber = 1;
+  const pageSize = 100;
+  const maxPages = 10;
+  let total = Infinity;
+  while ((pageNumber - 1) * pageSize < total && pageNumber <= maxPages) {
+    const data = await proxy('GET', '/api/v2/integrations', { query: { pageNumber, pageSize } });
+    total = data.total || 0;
+    allIntegrationsCache = allIntegrationsCache.concat((data.entities || []).map((i) => ({ id: i.id, name: i.name || i.id })));
+    pageNumber += 1;
+  }
+  allIntegrationsCache.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderDataActionsIntegrationOptions() {
+  const select = document.getElementById('dataActionsIntegrationSelect');
+  select.innerHTML = '';
+  select.appendChild(el('option', { value: '', text: allIntegrationsCache.length ? 'Choose an integration…' : 'No integrations found in this org' }));
+  allIntegrationsCache.forEach((i) => select.appendChild(el('option', { value: i.id, text: i.name })));
+}
+
+function integrationNameFor(id) {
+  const found = allIntegrationsCache.find((i) => i.id === id);
+  return found ? found.name : id || '—';
+}
+
+const selectedDataActionIds = new Set();
+let dataActionsVisibleIds = [];
+
+async function fetchFullDataAction(id) {
+  return proxy('GET', `/api/v2/integrations/actions/${id}`, { query: { expand: 'contract,config.request,config.response' } });
+}
+
+
+function renderDataActionsBulkBar() {
+  const ids = [...selectedDataActionIds];
+  document.getElementById('dataActionsBulkBar').classList.toggle('hidden', ids.length === 0);
+  document.getElementById('dataActionsBulkCount').textContent = `${ids.length} selected`;
+  document.getElementById('dataActionsSelectAll').checked =
+    dataActionsVisibleIds.length > 0 && dataActionsVisibleIds.every((id) => selectedDataActionIds.has(id));
+}
+
+const dataActionsResource = createListResource({
+  path: '/api/v2/integrations/actions',
+  pageSize: 50,
+  containerId: 'dataActionsTableBody',
+  filterId: 'dataActionsFilter',
+  loadMoreId: 'dataActionsLoadMoreBtn',
+  emptyId: 'dataActionsEmpty',
+  errorId: 'dataActionsError',
+  buildRow: (action) => {
+    const checkbox = el('input', { type: 'checkbox' });
+    checkbox.checked = selectedDataActionIds.has(action.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) selectedDataActionIds.add(action.id);
+      else selectedDataActionIds.delete(action.id);
+      renderDataActionsBulkBar();
+    });
+
+    const exportBtn = el('span', { class: 'row-edit', text: 'Export' });
+    exportBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        // Exported exactly as Genesys returns it (with expand=contract,config.request,config.response
+        // so it's the full definition, not the list summary) -- no reshaping, same as Genesys's own
+        // export of a data action.
+        const full = await withBusy(exportBtn, 'Loading…', () => fetchFullDataAction(action.id));
+        downloadJson(`data-action-${(full.name || 'action').replace(/[^a-z0-9-]+/gi, '_')}.json`, full);
+        showToast(`Exported "${full.name}".`);
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+
+    const del = el('span', { class: 'row-delete', text: 'Delete' });
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ok = await confirmModal({
+        title: 'Delete data action',
+        message: `Delete "${action.name}"? Any flow that calls it will start failing at that step. You'll have a few seconds to undo.`,
+      });
+      if (!ok) return;
+      showUndoableDelete({
+        itemName: action.name,
+        remove: () => {
+          dataActionsResource.remove(action.id);
+          selectedDataActionIds.delete(action.id);
+          renderDataActionsBulkBar();
+        },
+        restore: () => {
+          dataActionsResource.prepend(action);
+          renderDataActionsBulkBar();
+        },
+        commit: () => proxy('DELETE', `/api/v2/integrations/actions/${action.id}`),
+      });
+    });
+
+    return gridRow('auto 1.6fr 1fr 1.4fr .7fr auto', [
+      checkbox,
+      cellText(action.name, 'name'),
+      cellText(action.category || '—', 'muted'),
+      cellText(integrationNameFor(action.integrationId), 'muted'),
+      cellText(action.secure ? 'Yes' : 'No', 'muted'),
+      el('div', { class: 'row-actions' }, [exportBtn, del]),
+    ]);
+  },
+  onRender: (filtered) => {
+    dataActionsVisibleIds = filtered.map((a) => a.id);
+    renderDataActionsBulkBar();
+  },
+});
+
+async function loadDataActionsTab() {
+  await Promise.all([dataActionsResource.reset(), loadAllIntegrationsCache()]);
+  renderDataActionsIntegrationOptions();
+}
+
+document.getElementById('dataActionsRefreshBtn').addEventListener('click', () => {
+  loadDataActionsTab().catch((err) => showToast(err.message, true));
+});
+
+document.getElementById('dataActionsSelectAll').addEventListener('change', (e) => {
+  if (e.target.checked) dataActionsVisibleIds.forEach((id) => selectedDataActionIds.add(id));
+  else dataActionsVisibleIds.forEach((id) => selectedDataActionIds.delete(id));
+  dataActionsResource.render();
+});
+
+document.getElementById('dataActionsClearSelectedBtn').addEventListener('click', () => {
+  selectedDataActionIds.clear();
+  dataActionsResource.render();
+});
+
+// Each action stays its own file, exactly as Genesys returns it (no reshaping) -- one item
+// downloads directly, several are zipped together so it's still one download, not one per file.
+function dataActionExportItem(action) {
+  return { filename: `data-action-${(action.name || 'action').replace(/[^a-z0-9-]+/gi, '_')}.json`, data: action };
+}
+
+document.getElementById('dataActionsExportSelectedBtn').addEventListener('click', async () => {
+  const ids = [...selectedDataActionIds];
+  if (!ids.length) return;
+  const btn = document.getElementById('dataActionsExportSelectedBtn');
+  await withBusy(btn, 'Exporting…', async () => {
+    const results = await Promise.allSettled(ids.map((id) => fetchFullDataAction(id)));
+    const ok = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    const failedCount = results.length - ok.length;
+    if (ok.length) await downloadJsonAsZipOrSingle(ok.map(dataActionExportItem), 'data-actions-selected');
+    showToast(
+      failedCount
+        ? `Exported ${ok.length} of ${results.length} data action(s) (${failedCount} failed).`
+        : `Exported ${ok.length} data action${ok.length === 1 ? '' : 's'}.`,
+      !!failedCount
+    );
+  });
+});
+
+document.getElementById('dataActionsExportAllBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('dataActionsExportAllBtn');
+  await withBusy(btn, 'Exporting…', async () => {
+    try {
+      // Walks every page independent of what's already loaded on screen, so "export all" really
+      // means every data action in the org.
+      const all = [];
+      let pageNumber = 1;
+      let total = Infinity;
+      while (all.length < total) {
+        const data = await proxy('GET', '/api/v2/integrations/actions', { query: { pageNumber, pageSize: 50 } });
+        total = data.total || 0;
+        all.push(...(data.entities || []));
+        if (!data.entities || !data.entities.length) break;
+        pageNumber += 1;
+      }
+      const results = await Promise.allSettled(all.map((a) => fetchFullDataAction(a.id)));
+      const ok = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+      const failedCount = results.length - ok.length;
+      if (ok.length) await downloadJsonAsZipOrSingle(ok.map(dataActionExportItem), 'data-actions-all');
+      showToast(
+        failedCount
+          ? `Exported ${ok.length} of ${results.length} data action(s) (${failedCount} failed).`
+          : `Exported ${ok.length} data action${ok.length === 1 ? '' : 's'}.`,
+        !!failedCount
+      );
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+});
+
+document.getElementById('dataActionsDeleteSelectedBtn').addEventListener('click', async () => {
+  const ids = [...selectedDataActionIds];
+  if (!ids.length) return;
+  const names = dataActionsResource.state.items.filter((a) => ids.includes(a.id)).map((a) => a.name);
+  const count = ids.length;
+  const listLabel = names.length <= 5 ? names.join(', ') : `${count} data actions`;
+
+  const ok = await confirmModal({
+    title: `Delete ${count} data action${count === 1 ? '' : 's'}`,
+    message: `Delete ${listLabel}? Any flow that calls one of them will start failing at that step. You'll have a few seconds to undo before ${count === 1 ? 'it is' : 'they are'} actually removed.`,
+  });
+  if (!ok) return;
+
+  const toDelete = dataActionsResource.state.items.filter((a) => ids.includes(a.id));
+  showUndoableDelete({
+    itemName: count === 1 ? names[0] : `${count} data actions`,
+    remove: () => {
+      ids.forEach((id) => {
+        dataActionsResource.remove(id);
+        selectedDataActionIds.delete(id);
+      });
+    },
+    restore: () => {
+      toDelete.forEach((a) => dataActionsResource.prepend(a));
+    },
+    commit: async () => {
+      const results = await Promise.allSettled(ids.map((id) => proxy('DELETE', `/api/v2/integrations/actions/${id}`)));
+      const failed = results.filter((r) => r.status === 'rejected');
+      if (failed.length) throw new Error(`${failed.length} of ${count} could not be deleted`);
+    },
+  });
+});
+
+document.getElementById('dataActionsImportBtn').addEventListener('click', () => {
+  const integrationId = document.getElementById('dataActionsIntegrationSelect').value;
+  if (!integrationId) { showToast('Choose a target integration first.', true); return; }
+  document.getElementById('dataActionsImportFile').click();
+});
+
+document.getElementById('dataActionsImportFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+
+  const integrationId = document.getElementById('dataActionsIntegrationSelect').value;
+  if (!integrationId) { showToast('Choose a target integration first.', true); return; }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    showToast('That file is not valid JSON.', true);
+    return;
+  }
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  if (!items.length) { showToast('Nothing to import.', true); return; }
+
+  const btn = document.getElementById('dataActionsImportBtn');
+  await withBusy(btn, 'Importing…', async () => {
+    const results = [];
+    for (const item of items) {
+      const label = (item && item.name) || '(unnamed)';
+      if (!item || !item.name || !item.contract || !item.config) {
+        results.push({ ok: false, label, message: 'missing "name", "contract", or "config"' });
+        continue;
+      }
+      try {
+        const created = await proxy('POST', '/api/v2/integrations/actions', {
+          body: {
+            name: item.name,
+            category: item.category || 'Custom',
+            secure: !!item.secure,
+            integrationId,
+            contract: item.contract,
+            config: item.config,
+          },
+        });
+        dataActionsResource.prepend(created);
+        results.push({ ok: true, label: item.name });
+      } catch (err) {
+        results.push({ ok: false, label, message: err.message });
+      }
+    }
+    renderBulkResults('dataActionsResults', results);
+    const okCount = results.filter((r) => r.ok).length;
+    showToast(`Imported ${okCount} of ${results.length} data action(s) into "${integrationNameFor(integrationId)}".`, okCount < results.length);
+  });
+});
 
 // ---- Evaluation Forms ----------------------------------------------------
 // Genesys Cloud Quality Management "evaluation form" = a scorecard of question groups, each
