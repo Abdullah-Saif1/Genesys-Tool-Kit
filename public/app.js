@@ -541,7 +541,7 @@ const tabMeta = {
   canned: { title: 'Canned Responses', sub: 'Reusable agent replies, organised by library', create: 'New response', bulk: true },
   wrapup: { title: 'Wrap-up Codes', sub: 'Disposition codes agents apply after an interaction', create: 'New code', bulk: true },
   queues: { title: 'Queues', sub: 'Select one or more queues to manage members, codes & libraries', create: 'New queue', bulk: false },
-  interactions: { title: 'Disconnect Interaction', sub: 'Disconnect a specific live interaction, or every interaction on selected queue(s)', create: null, bulk: false },
+  interactions: { title: 'Disconnect Interaction', sub: 'Disconnect a specific live interaction by ID, or every interaction currently active on one queue', create: null, bulk: false },
   users: { title: 'Users & Divisions', sub: 'Your organisation directory', create: null, bulk: false },
   skills: { title: 'Skills & Routing', sub: 'ACD skills used for skills-based routing', create: 'New skill', bulk: false },
   architect: { title: 'Architect', sub: 'Flows & prompts, and AI-assisted flow generation', create: null, bulk: false },
@@ -2747,10 +2747,16 @@ const interactionQueuesResource = createListResource({
   onLoaded: () => interactionQueuesResource.render(),
 });
 
+// Single-select by design -- disconnecting is destructive and irreversible, so this stays scoped
+// to exactly one queue at a time rather than the multi-select the Queues tab uses. Kept as a Set
+// (rather than a lone variable) purely so getSelectedInteractionQueueIds() keeps returning an
+// array and every downstream consumer (segmentFilters, the summary line) needs no changes.
 const selectedInteractionQueueIds = new Set();
 
 function toggleInteractionQueueSelection(queueId) {
-  if (selectedInteractionQueueIds.has(queueId)) selectedInteractionQueueIds.delete(queueId); else selectedInteractionQueueIds.add(queueId);
+  const alreadySelected = selectedInteractionQueueIds.has(queueId);
+  selectedInteractionQueueIds.clear();
+  if (!alreadySelected) selectedInteractionQueueIds.add(queueId); // clicking the selected queue again deselects it
   interactionQueuesResource.render();
   refreshInteractionQueueSelectionSummary();
 }
@@ -2765,8 +2771,7 @@ function refreshInteractionQueueSelectionSummary() {
   const names = getSelectedInteractionQueueNames();
   const selectedQueues = interactionQueuesResource.state.items.filter((q) => selectedInteractionQueueIds.has(q.id));
 
-  document.getElementById('interactionQueuesSelectionSummary').textContent =
-    ids.length ? `${ids.length} queue${ids.length === 1 ? '' : 's'} selected` : 'No queues selected';
+  document.getElementById('interactionQueuesSelectionSummary').textContent = ids.length ? 'Queue selected' : 'No queue selected';
   document.getElementById('interactionQueuesSelectionMeta').textContent = names.join(', ');
 
   // Union of every media type configured across the selected queue(s) — what "Load active
@@ -2837,6 +2842,7 @@ function extractInteractionFromAnalyticsConversation(conv, selectedQueueIds, que
   return {
     conversationId: conv.conversationId,
     queueId: matchedQueueId,
+    queueIds: [...queueIds], // every queue this conversation touched, not just the matched/display one
     queueName,
     mediaTypes: [...mediaTypes],
     participantIds: participants.map((p) => p.participantId).filter(Boolean),
@@ -3063,7 +3069,7 @@ function updateInteractionsBulkButtons() {
   selBtn.classList.toggle('hidden', selectedInteractionIds.size === 0);
   selBtn.textContent = `Disconnect selected (${selectedInteractionIds.size})`;
   allBtn.classList.toggle('hidden', currentInteractions.length === 0);
-  allBtn.textContent = `Disconnect ALL on selected queue(s) (${currentInteractions.length})`;
+  allBtn.textContent = `Disconnect ALL on selected queue (${currentInteractions.length})`;
 }
 
 // Disconnects every participant of each given interaction. Media-agnostic: the same participant
@@ -3084,20 +3090,80 @@ async function disconnectInteractions(list) {
   return results;
 }
 
+// Returns the Set of conversationIds that were actually disconnected -- existing callers ignore
+// it (they only ever act on the shared browsed/checked list, which this already updates in
+// place), but the direct-by-ID flow uses it to know whether to clear its input on success.
 async function runInteractionDisconnect(items, busyEl, busyLabel) {
+  let succeededIds = new Set();
   await withBusy(busyEl, busyLabel, async () => {
     const results = await disconnectInteractions(
       items.map((it) => ({ conversationId: it.conversationId, participantIds: it.participantIds, label: `${it.queueName} (${interactionMediaText(it.mediaTypes)})` }))
     );
     renderBulkResults('interactionsResults', results);
-    const succeededIds = new Set(results.filter((r) => r.ok).map((r) => r.conversationId));
+    succeededIds = new Set(results.filter((r) => r.ok).map((r) => r.conversationId));
     currentInteractions = currentInteractions.filter((it) => !succeededIds.has(it.conversationId));
     succeededIds.forEach((id) => selectedInteractionIds.delete(id));
     renderInteractionsTable();
     const okCount = results.filter((r) => r.ok).length;
     showToast(`${okCount} of ${results.length} interaction(s) disconnected.`, okCount < results.length);
   });
+  return succeededIds;
 }
+
+// ---- Disconnect by interaction ID -----------------------------------------
+// A direct path alongside the browse-by-date-range flow above: given a queue and a known
+// conversation ID, look it up via Genesys's single-conversation analytics endpoint (same
+// participants/sessions/segments shape the browse flow already parses, so it reuses
+// extractInteractionFromAnalyticsConversation rather than a second copy of that logic), confirm
+// it's actually still active and actually touched the selected queue, then disconnect it through
+// the same runInteractionDisconnect used everywhere else in this tab.
+document.getElementById('interactionsDirectDisconnectBtn').addEventListener('click', async () => {
+  showAlertError('interactionsDirectError', '');
+  const queueIds = getSelectedInteractionQueueIds();
+  if (!queueIds.length) { showAlertError('interactionsDirectError', 'Select a queue first.'); return; }
+
+  const idInput = document.getElementById('interactionsDirectIdInput');
+  const conversationId = idInput.value.trim();
+  if (!conversationId) { showAlertError('interactionsDirectError', 'Enter an interaction ID.'); return; }
+
+  const btn = document.getElementById('interactionsDirectDisconnectBtn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Looking up…';
+
+  let interaction;
+  try {
+    const conv = await proxy('GET', `/api/v2/analytics/conversations/${encodeURIComponent(conversationId)}/details`);
+    if (conv.conversationEnd) throw new Error('This interaction has already ended — there is nothing to disconnect.');
+
+    const queueNameById = {};
+    interactionQueuesResource.state.items.forEach((q) => { queueNameById[q.id] = q.name; });
+    interaction = extractInteractionFromAnalyticsConversation(conv, queueIds, queueNameById);
+
+    if (!interaction.queueIds.includes(queueIds[0])) {
+      const selectedQueueName = queueNameById[queueIds[0]] || queueIds[0];
+      throw new Error(`This interaction isn't associated with "${selectedQueueName}" — found it under "${interaction.queueName}" instead.`);
+    }
+    if (!interaction.participantIds.length) throw new Error('No participants found for this interaction — nothing to disconnect.');
+  } catch (err) {
+    showAlertError('interactionsDirectError', err.message);
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = originalLabel;
+
+  const ok = await confirmModal({
+    title: 'Disconnect interaction',
+    message: `Disconnect this ${interactionMediaText(interaction.mediaTypes)} interaction on "${interaction.queueName}" right now? This immediately drops the live interaction and cannot be undone.`,
+    confirmLabel: 'Disconnect',
+  });
+  if (!ok) return;
+
+  const succeededIds = await runInteractionDisconnect([interaction], btn, 'Disconnecting…');
+  if (succeededIds.has(interaction.conversationId)) idInput.value = '';
+});
 
 document.getElementById('interactionQueuesRefreshBtn').addEventListener('click', () => {
   interactionQueuesResource.reset().catch((err) => showToast(err.message, true));
@@ -3121,7 +3187,7 @@ document.getElementById('interactionsDisconnectSelectedBtn').addEventListener('c
 
 document.getElementById('interactionsDisconnectAllBtn').addEventListener('click', async () => {
   if (!currentInteractions.length) return;
-  const queueNames = getSelectedInteractionQueueNames().join(', ') || 'the selected queue(s)';
+  const queueNames = getSelectedInteractionQueueNames().join(', ') || 'the selected queue';
   const items = currentInteractions.slice();
   const ok = await confirmModal({
     title: `Disconnect ALL ${items.length} interactions`,
@@ -5986,6 +6052,14 @@ async function loadAuditTab() {
 // history, newest first. Update this array when shipping something worth calling out.
 
 const RELEASE_NOTES = [
+  {
+    date: '2026-08-21',
+    title: 'Disconnect Interaction: single-queue selection, disconnect by ID',
+    items: [
+      'Queue selection is now single-select, not multi — disconnecting is destructive and irreversible, so this keeps every action scoped to exactly one queue at a time.',
+      'New "Disconnect by interaction ID" card: enter a known interaction ID and disconnect it directly, without browsing a date range first. Confirms the interaction is still active and actually belongs to the selected queue before offering to disconnect it.',
+    ],
+  },
   {
     date: '2026-08-19',
     title: 'Bulk edit emails for Users',

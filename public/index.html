@@ -283,9 +283,10 @@
           <!-- Interactions -->
           <section id="tab-interactions" class="tab-panel hidden">
             <div class="notice-box">
-              Disconnects live, in-progress interactions immediately &mdash; this cannot be undone. Pick a From/To
-              range below (Genesys caps it at 31 days) and only interactions still in progress within that window
-              are shown. Always double-check before confirming.
+              Disconnects live, in-progress interactions immediately &mdash; this cannot be undone. Select one queue
+              on the left, then either enter a specific interaction ID and disconnect it directly, or load every
+              interaction active on that queue within a date range (Genesys caps it at 31 days). Always double-check
+              before confirming.
             </div>
 
             <div class="queue-layout">
@@ -300,7 +301,19 @@
 
               <div class="queue-detail">
                 <div class="card card-pad">
-                  <div id="interactionQueuesSelectionSummary" style="font-weight:600;font-size:14px">No queues selected</div>
+                  <div class="detail-card-title">Disconnect by interaction ID</div>
+                  <p class="sub" style="font-size:12px;color:var(--text-faint);margin-top:2px;margin-bottom:12px">Already know the interaction? Select a queue, enter its ID, and disconnect it directly &mdash; no need to search first.</p>
+                  <div class="field-label">Interaction ID</div>
+                  <input type="text" id="interactionsDirectIdInput" class="text-input" placeholder="e.g. 3f1a2b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c" autocomplete="off" spellcheck="false" />
+                  <div id="interactionsDirectError" class="alert alert-danger hidden" style="margin-top:8px">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                    <span id="interactionsDirectErrorText"></span>
+                  </div>
+                  <button id="interactionsDirectDisconnectBtn" class="btn btn-danger" style="margin-top:10px;width:100%">Disconnect</button>
+                </div>
+
+                <div class="card card-pad">
+                  <div id="interactionQueuesSelectionSummary" style="font-weight:600;font-size:14px">No queue selected</div>
                   <div id="interactionQueuesSelectionMeta" class="sub" style="font-size:12px;color:var(--text-faint);margin-top:2px"></div>
                   <div id="interactionQueuesSelectionMedia" class="sub" style="font-size:12px;color:var(--text-faint);margin-top:2px"></div>
                   <div class="field-label" style="margin-top:12px">Range preset</div>
@@ -361,7 +374,7 @@
                     </div>
                     <div id="interactionsTableBody"></div>
                   </div>
-                  <p id="interactionsEmpty" class="empty-note hidden">No active interactions found for the selected queue(s).</p>
+                  <p id="interactionsEmpty" class="empty-note hidden">No active interactions found for the selected queue.</p>
                   <div id="interactionsResults" class="bulk-results"></div>
                   <div id="interactionsError" class="alert alert-danger hidden" style="margin-top:10px">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
