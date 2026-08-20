@@ -615,6 +615,13 @@ input, select, textarea, button { font-family: inherit; }
 .eval-answer-row input[type="text"] { flex: 1; min-width: 0; }
 .eval-answer-row input[type="number"] { width: 64px; flex: none; }
 
+/* ---- Overview ---- */
+.skeleton-text { opacity: .35; animation: pulse-fade 1.2s ease-in-out infinite; }
+@keyframes pulse-fade { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
+.overview-action { transition: border-color .12s ease, transform .12s ease; }
+.overview-action:hover, .overview-action:focus-visible { border-color: var(--accent); transform: translateY(-1px); }
+.overview-action:active { transform: translateY(0); }
+
 /* ---- Theme toggle ---- */
 .theme-toggle-btn {
   position: fixed; top: 16px; right: 16px; z-index: 55;
