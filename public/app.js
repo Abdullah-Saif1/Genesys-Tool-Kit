@@ -3111,16 +3111,15 @@ async function runInteractionDisconnect(items, busyEl, busyLabel) {
 }
 
 // ---- Disconnect by interaction ID -----------------------------------------
-// A direct path alongside the browse-by-date-range flow above: given a queue and a known
-// conversation ID, look it up via Genesys's single-conversation analytics endpoint (same
-// participants/sessions/segments shape the browse flow already parses, so it reuses
-// extractInteractionFromAnalyticsConversation rather than a second copy of that logic), confirm
-// it's actually still active and actually touched the selected queue, then disconnect it through
-// the same runInteractionDisconnect used everywhere else in this tab.
+// A direct path alongside the browse-by-date-range flow above: no queue needed -- the actual
+// disconnect call (participants/{id} PATCH, in disconnectInteractions above) only ever needs a
+// conversationId and its participantIds, never a queue. Enter an ID, look it up via Genesys's
+// single-conversation analytics endpoint (same participants/sessions/segments shape the browse
+// flow already parses, so it reuses extractInteractionFromAnalyticsConversation rather than a
+// second copy of that logic) to confirm it's still active and get its participants, then
+// disconnect through the same runInteractionDisconnect used everywhere else in this tab.
 document.getElementById('interactionsDirectDisconnectBtn').addEventListener('click', async () => {
   showAlertError('interactionsDirectError', '');
-  const queueIds = getSelectedInteractionQueueIds();
-  if (!queueIds.length) { showAlertError('interactionsDirectError', 'Select a queue first.'); return; }
 
   const idInput = document.getElementById('interactionsDirectIdInput');
   const conversationId = idInput.value.trim();
@@ -3138,12 +3137,8 @@ document.getElementById('interactionsDirectDisconnectBtn').addEventListener('cli
 
     const queueNameById = {};
     interactionQueuesResource.state.items.forEach((q) => { queueNameById[q.id] = q.name; });
-    interaction = extractInteractionFromAnalyticsConversation(conv, queueIds, queueNameById);
+    interaction = extractInteractionFromAnalyticsConversation(conv, [], queueNameById);
 
-    if (!interaction.queueIds.includes(queueIds[0])) {
-      const selectedQueueName = queueNameById[queueIds[0]] || queueIds[0];
-      throw new Error(`This interaction isn't associated with "${selectedQueueName}" — found it under "${interaction.queueName}" instead.`);
-    }
     if (!interaction.participantIds.length) throw new Error('No participants found for this interaction — nothing to disconnect.');
   } catch (err) {
     showAlertError('interactionsDirectError', err.message);
@@ -6057,7 +6052,7 @@ const RELEASE_NOTES = [
     title: 'Disconnect Interaction: single-queue selection, disconnect by ID',
     items: [
       'Queue selection is now single-select, not multi — disconnecting is destructive and irreversible, so this keeps every action scoped to exactly one queue at a time.',
-      'New "Disconnect by interaction ID" card: enter a known interaction ID and disconnect it directly, without browsing a date range first. Confirms the interaction is still active and actually belongs to the selected queue before offering to disconnect it.',
+      'New "Disconnect by interaction ID" card: enter a known interaction ID and disconnect it directly, no queue selection or date range needed. Confirms the interaction is still active before offering to disconnect it.',
     ],
   },
   {
