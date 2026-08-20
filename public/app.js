@@ -2963,6 +2963,10 @@ function renderInteractionsTable() {
   body.innerHTML = '';
   document.getElementById('interactionsEmpty').classList.toggle('hidden', currentInteractions.length > 0);
 
+  const liveBadge = document.getElementById('interactionsLiveBadge');
+  liveBadge.classList.toggle('hidden', currentInteractions.length === 0);
+  document.getElementById('interactionsLiveCount').textContent = `${currentInteractions.length} live`;
+
   currentInteractions.forEach((it) => {
     const checkbox = el('input', { type: 'checkbox' });
     checkbox.checked = selectedInteractionIds.has(it.conversationId);

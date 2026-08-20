@@ -334,7 +334,10 @@
 
                 <div class="card card-pad">
                   <div class="detail-card-head">
-                    <div class="detail-card-title" id="interactionsListTitle">Active interactions</div>
+                    <div style="display:flex;align-items:center;gap:10px">
+                      <div class="detail-card-title" id="interactionsListTitle">Active interactions</div>
+                      <span id="interactionsLiveBadge" class="badge badge-live hidden"><span class="badge-dot"></span><span id="interactionsLiveCount"></span></span>
+                    </div>
                     <div style="display:flex;gap:8px">
                       <button id="interactionsDisconnectSelectedBtn" class="btn btn-danger hidden"></button>
                       <button id="interactionsDisconnectAllBtn" class="btn btn-danger hidden"></button>
