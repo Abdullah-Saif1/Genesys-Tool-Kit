@@ -1660,11 +1660,20 @@ const queuesResource = createListResource({
         commit: () => proxy('DELETE', `/api/v2/routing/queues/${queue.id}`),
       });
     });
-    const row = el('div', { class: `queue-list-item${selected ? ' selected' : ''}` }, [
+    const row = el('div', {
+      class: `queue-list-item${selected ? ' selected' : ''}`,
+      role: 'button',
+      tabindex: '0',
+      'aria-pressed': selected ? 'true' : 'false',
+    }, [
       el('div', { class: 'name' }, [cellText(queue.name), del, editBtn]),
       el('div', { class: 'meta', text: `${(queue.division && queue.division.name) || ''} · ${queue.memberCount || 0} members` }),
     ]);
     row.addEventListener('click', () => toggleQueueSelection(queue.id));
+    row.addEventListener('keydown', (e) => {
+      if (e.target !== row) return; // let Enter/Space on the nested Edit/Delete links behave normally
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleQueueSelection(queue.id); }
+    });
     return row;
   },
   onLoaded: () => queuesResource.render(),
@@ -1744,6 +1753,12 @@ async function refreshManagedQueuePanels() {
     meta.textContent = q ? `${(q.division && q.division.name) || ''} · ${q.memberCount || 0} members` : '';
     multiWrap.classList.add('hidden');
     membersCard.classList.remove('hidden');
+    // Switching queues previously left the members/wrap-up chips and the settings grid showing
+    // the PREVIOUSLY selected queue's data (stale, not just blank) for as long as this fetch took
+    // -- clear/hide them immediately on click rather than only once the new data arrives.
+    settingsGrid.classList.add('hidden');
+    document.getElementById('queueMembersChips').innerHTML = '<span class="skeleton-text" style="font-size:12px;color:var(--text-faint)">Loading members…</span>';
+    document.getElementById('queueWrapupChips').innerHTML = '<span class="skeleton-text" style="font-size:12px;color:var(--text-faint)">Loading wrap-up codes…</span>';
     await Promise.all([
       loadQueueMembers(queueIds[0]).catch((err) => showAlertError('membersError', err.message)),
       loadQueueWrapupCodes(queueIds[0]).catch((err) => showAlertError('queueWrapupError', err.message)),
@@ -2736,12 +2751,20 @@ const interactionQueuesResource = createListResource({
     const mediaKeys = queue.mediaSettings ? orderMediaTypeKeys(Object.keys(queue.mediaSettings)) : null;
     const mediaText = mediaKeys && mediaKeys.length ? mediaKeys.map((k) => mediaTypeLabel(k)).join(', ') : null;
 
-    const row = el('div', { class: `queue-list-item${selected ? ' selected' : ''}` }, [
+    const row = el('div', {
+      class: `queue-list-item${selected ? ' selected' : ''}`,
+      role: 'button',
+      tabindex: '0',
+      'aria-pressed': selected ? 'true' : 'false',
+    }, [
       el('div', { class: 'name' }, [cellText(queue.name)]),
       el('div', { class: 'meta', text: divisionName }),
       el('div', { class: 'meta', text: mediaText || 'Media types unavailable' }),
     ]);
     row.addEventListener('click', () => toggleInteractionQueueSelection(queue.id));
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleInteractionQueueSelection(queue.id); }
+    });
     return row;
   },
   onLoaded: () => interactionQueuesResource.render(),
