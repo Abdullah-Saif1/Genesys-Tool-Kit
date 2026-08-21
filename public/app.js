@@ -5093,7 +5093,7 @@ async function loadArchitectTab() {
 // gets sent back) rather than reconstructed field-by-field, since their nested shape (JSON
 // schemas, request/response templates) isn't something this app has verified in detail.
 
-let allIntegrationsCache = []; // {id, name}
+let allIntegrationsCache = []; // {id, name, integrationType}
 
 async function loadAllIntegrationsCache() {
   allIntegrationsCache = [];
@@ -5104,7 +5104,12 @@ async function loadAllIntegrationsCache() {
   while ((pageNumber - 1) * pageSize < total && pageNumber <= maxPages) {
     const data = await proxy('GET', '/api/v2/integrations', { query: { pageNumber, pageSize } });
     total = data.total || 0;
-    allIntegrationsCache = allIntegrationsCache.concat((data.entities || []).map((i) => ({ id: i.id, name: i.name || i.id })));
+    // The list endpoint returns full Integration objects (same shape as the single-GET), so
+    // integrationType.id -- needed for the native-export-compatible shape below -- comes for
+    // free here, no extra per-integration call needed.
+    allIntegrationsCache = allIntegrationsCache.concat(
+      (data.entities || []).map((i) => ({ id: i.id, name: i.name || i.id, integrationType: i.integrationType && i.integrationType.id }))
+    );
     pageNumber += 1;
   }
   allIntegrationsCache.sort((a, b) => a.name.localeCompare(b.name));
@@ -5132,8 +5137,38 @@ let dataActionsVisibleIds = [];
 // expanded nothing config-related, so exported actions carried an empty config.request (no
 // requestUrlTemplate/headers/etc.) even though contract/name/category came through fine -- exactly
 // the "URL field was empty after import" symptom reported live.
+// Reshapes a fetched action into the exact format Genesys's own native "Import Action" admin UI
+// (Integrations -> Actions -> row menu -> Export/Import) expects -- verified against a real file
+// exported that way, not guessed: top-level name/integrationType/actionType/config/contract/secure,
+// no id/integrationId/category/version/selfUri (those are org-specific and meaningless across
+// orgs), and contract trimmed to just inputSchema/successSchema (see the import-side comment for
+// why -- GET's contract carries extra read-only fields the native importer rejects as "additional
+// properties"). integrationType is a property of the *integration*, not the action -- Genesys's
+// own Action resource never returns it -- so it's resolved from allIntegrationsCache, which the
+// Data Actions tab already loads before any row is exportable.
+function toNativeExportShape(action) {
+  const integration = allIntegrationsCache.find((i) => i.id === action.integrationId);
+  if (!integration || !integration.integrationType) {
+    throw new Error(`Couldn't determine the integration type for "${action.name}" -- try refreshing the integration list first.`);
+  }
+  const inputSchema = action.contract && action.contract.input && action.contract.input.inputSchema;
+  const successSchema = action.contract && action.contract.output && action.contract.output.successSchema;
+  if (!inputSchema || !successSchema) {
+    throw new Error(`"${action.name}" is missing its input or output schema -- nothing to export.`);
+  }
+  return {
+    name: action.name,
+    integrationType: integration.integrationType,
+    actionType: 'custom',
+    config: action.config,
+    contract: { input: { inputSchema }, output: { successSchema } },
+    secure: !!action.secure,
+  };
+}
+
 async function fetchFullDataAction(id) {
-  return proxy('GET', `/api/v2/integrations/actions/${id}`, { query: { expand: 'contract', includeConfig: true } });
+  const action = await proxy('GET', `/api/v2/integrations/actions/${id}`, { query: { expand: 'contract', includeConfig: true } });
+  return toNativeExportShape(action);
 }
 
 
@@ -5166,9 +5201,9 @@ const dataActionsResource = createListResource({
     exportBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       try {
-        // Exported exactly as Genesys returns it (with expand=contract,config.request,config.response
-        // so it's the full definition, not the list summary) -- no reshaping, same as Genesys's own
-        // export of a data action.
+        // fetchFullDataAction fetches the full definition and reshapes it to match Genesys's own
+        // native export format (see toNativeExportShape) so this file round-trips through either
+        // this app's own import or Genesys's native "Import Action" admin UI.
         const full = await withBusy(exportBtn, 'Loading…', () => fetchFullDataAction(action.id));
         downloadJson(`data-action-${(full.name || 'action').replace(/[^a-z0-9-]+/gi, '_')}.json`, full);
         showToast(`Exported "${full.name}".`);
