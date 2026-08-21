@@ -5125,8 +5125,15 @@ function integrationNameFor(id) {
 const selectedDataActionIds = new Set();
 let dataActionsVisibleIds = [];
 
+// Confirmed against Genesys's own OpenAPI spec for GET /integrations/actions/{actionId}: `expand`
+// only ever accepts the single literal value "contract" (not a CSV list, and "config.request"/
+// "config.response" were never valid values for it at all) -- config is a SEPARATE `includeConfig`
+// boolean, off by default. The old `expand: 'contract,config.request,config.response'` silently
+// expanded nothing config-related, so exported actions carried an empty config.request (no
+// requestUrlTemplate/headers/etc.) even though contract/name/category came through fine -- exactly
+// the "URL field was empty after import" symptom reported live.
 async function fetchFullDataAction(id) {
-  return proxy('GET', `/api/v2/integrations/actions/${id}`, { query: { expand: 'contract,config.request,config.response' } });
+  return proxy('GET', `/api/v2/integrations/actions/${id}`, { query: { expand: 'contract', includeConfig: true } });
 }
 
 
@@ -5350,6 +5357,19 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
         results.push({ ok: false, label, message: 'missing "name", "contract", or "config"' });
         continue;
       }
+      // GET returns contract.input/output shaped as ActionInput/ActionOutput (inputSchemaUri,
+      // errorSchema, errorSchemaUri, *Flattened variants included), but the create-action endpoint
+      // only accepts PostInputContract/PostOutputContract -- just inputSchema and successSchema.
+      // Sending the extra GET-only fields back is exactly the shape Genesys's own native Import
+      // Action UI rejected live ("contract.input/output: must NOT have additional properties");
+      // stripping down to what the create API actually documents avoids relying on it silently
+      // ignoring fields it doesn't expect.
+      const inputSchema = item.contract.input && item.contract.input.inputSchema;
+      const successSchema = item.contract.output && item.contract.output.successSchema;
+      if (!inputSchema || !successSchema) {
+        results.push({ ok: false, label, message: 'contract is missing input.inputSchema or output.successSchema' });
+        continue;
+      }
       try {
         const created = await proxy('POST', '/api/v2/integrations/actions', {
           body: {
@@ -5357,7 +5377,7 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
             category: item.category || 'Custom',
             secure: !!item.secure,
             integrationId,
-            contract: item.contract,
+            contract: { input: { inputSchema }, output: { successSchema } },
             config: item.config,
           },
         });
