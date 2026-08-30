@@ -204,17 +204,27 @@ function parseLines(text) {
     .filter(Boolean);
 }
 
+// A row is ok, failed, or (optional) skipped -- skipped means nothing went wrong, there was just
+// nothing to do (e.g. an import item that already exists). Existing callers never set `.skipped`,
+// so they're unaffected; it exists so a benign no-op doesn't have to be reported as a failure just
+// to get its explanatory message shown.
 function renderBulkResults(containerId, results) {
   const container = document.getElementById(containerId);
   container.innerHTML = '';
   const okCount = results.filter((r) => r.ok).length;
-  container.appendChild(el('div', { class: 'result-summary', text: `${okCount} of ${results.length} succeeded` }));
+  const skipCount = results.filter((r) => r.skipped).length;
+  const summary = skipCount
+    ? `${okCount} of ${results.length} succeeded, ${skipCount} skipped`
+    : `${okCount} of ${results.length} succeeded`;
+  container.appendChild(el('div', { class: 'result-summary', text: summary }));
   results.forEach((r) => {
+    const state = r.skipped ? 'skip' : r.ok ? 'ok' : 'fail';
+    const symbol = state === 'ok' ? '✓' : state === 'skip' ? '•' : '✗';
     container.appendChild(
-      el('div', { class: `result-row ${r.ok ? 'ok' : 'fail'}` }, [
-        el('span', { text: r.ok ? '✓' : '✗' }),
+      el('div', { class: `result-row ${state}` }, [
+        el('span', { text: symbol }),
         el('span', { text: ` ${r.label}` }),
-        el('span', { text: r.ok ? '' : ` - ${r.message}` }),
+        el('span', { text: state === 'ok' ? '' : ` - ${r.message}` }),
       ])
     );
   });
@@ -1765,6 +1775,13 @@ document.getElementById('flowOutcomeBulkSubmitBtn').addEventListener('click', as
         continue;
       }
       try {
+        // Same "already exists" check as import below -- pasting a name that's already an
+        // outcome would otherwise just fail with Genesys's own duplicate-name error.
+        const existing = await proxy('GET', '/api/v2/flows/outcomes', { query: { name, pageSize: 25 } });
+        if ((existing.entities || []).some((o) => (o.name || '').toLowerCase() === name.toLowerCase())) {
+          results.push({ skipped: true, label: name, message: 'already exists — left as-is' });
+          continue;
+        }
         const body = { name };
         if (description) body.description = description;
         const created = await proxy('POST', '/api/v2/flows/outcomes', { body });
@@ -1840,6 +1857,18 @@ document.getElementById('flowOutcomesImportFile').addEventListener('change', asy
         continue;
       }
       try {
+        // Genesys rejects creating an outcome whose name already exists -- guaranteed to happen
+        // for every single item when re-importing a file you just exported from this same org,
+        // since nothing removed the originals (there's no delete API for this resource). Check
+        // for an existing exact name match first and skip it cleanly instead of letting that
+        // hit the API as an error; `name` is a filter, not necessarily an exact match, so the
+        // exact comparison still happens client-side against whatever it returns.
+        const existing = await proxy('GET', '/api/v2/flows/outcomes', { query: { name: item.name, pageSize: 25 } });
+        const alreadyExists = (existing.entities || []).some((o) => (o.name || '').toLowerCase() === item.name.toLowerCase());
+        if (alreadyExists) {
+          results.push({ skipped: true, label: item.name, message: 'already exists — left as-is (outcomes can\'t be deleted or overwritten by import)' });
+          continue;
+        }
         // Division is deliberately not sent -- it's org-specific and this file may well be
         // crossing orgs, same reasoning as Data Actions' integrationId. Imported outcomes land
         // in the default division; reassign via Edit afterward if needed.
@@ -1854,7 +1883,10 @@ document.getElementById('flowOutcomesImportFile').addEventListener('change', asy
     }
     renderBulkResults('flowOutcomesResults', results);
     const okCount = results.filter((r) => r.ok).length;
-    showToast(`Imported ${okCount} of ${results.length} flow outcome(s).`, okCount < results.length);
+    const skipCount = results.filter((r) => r.skipped).length;
+    const failCount = results.length - okCount - skipCount;
+    const skipNote = skipCount ? ` (${skipCount} already existed)` : '';
+    showToast(`Imported ${okCount} of ${results.length} flow outcome(s)${skipNote}.`, failCount > 0);
   });
 });
 

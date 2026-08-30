@@ -440,6 +440,7 @@ input, select, textarea, button { font-family: inherit; }
 .result-row { font-size: 12px; padding: 2px 0; }
 .result-row.ok { color: var(--success-text); }
 .result-row.fail { color: var(--danger); }
+.result-row.skip { color: var(--text-faint); }
 
 /* ---- Inline field validation ---- */
 .field-hint { font-size: 11px; color: var(--text-faint); margin-top: 4px; }
