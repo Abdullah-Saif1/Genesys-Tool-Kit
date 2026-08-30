@@ -24,6 +24,12 @@
   </script>
 </head>
 <body>
+  <!-- Shown for the duration of any withBusy() action anywhere in the app -- a consistent,
+       always-on-top signal that something is processing, on top of that action's own button
+       state. Real progress (setProgress) when an operation knows its own completion fraction
+       (bulk-add, import, export-all, bulk-disconnect); a simulated trickle otherwise, since a
+       single API call of unknown duration has no real "percent done" to report. -->
+  <div id="globalProgressBar" class="global-progress hidden"><div id="globalProgressBarFill" class="global-progress-fill"></div></div>
   <button id="layoutToggleBtn" class="layout-toggle-btn" title="Toggle mobile view" aria-label="Toggle mobile view"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg></button>
   <button id="themeToggleBtn" class="theme-toggle-btn" title="Toggle dark mode" aria-label="Toggle dark mode"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg></button>
   <div id="app">
