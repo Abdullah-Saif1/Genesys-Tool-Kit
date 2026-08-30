@@ -284,8 +284,9 @@ function renderBulkResults(containerId, results) {
 
 // ---- confirm modal (replaces native confirm()) ----------------------------
 
-// Resolves true only when the user clicks the explicit confirm button. Escape and clicking the
-// overlay both cancel — there is no path that lets the destructive action fire by accident.
+// Resolves true only when the user clicks the explicit confirm button. Escape cancels, but
+// clicking the backdrop deliberately does nothing -- Cancel is the only mouse path out, so an
+// accidental click outside never dismisses the dialog one way or the other.
 function confirmModal({ title, message, confirmLabel = 'Delete', cancelLabel = 'Cancel', danger = true, usageNote = '' }) {
   return new Promise((resolve) => {
     const overlay = document.getElementById('confirmModalOverlay');
@@ -305,18 +306,15 @@ function confirmModal({ title, message, confirmLabel = 'Delete', cancelLabel = '
       overlay.classList.add('hidden');
       confirmBtn.removeEventListener('click', onConfirm);
       cancelBtn.removeEventListener('click', onCancel);
-      overlay.removeEventListener('click', onOverlay);
       document.removeEventListener('keydown', onKey);
       resolve(result);
     }
     function onConfirm() { cleanup(true); }
     function onCancel() { cleanup(false); }
-    function onOverlay(e) { if (e.target === overlay) cleanup(false); }
     function onKey(e) { if (e.key === 'Escape') cleanup(false); }
 
     confirmBtn.addEventListener('click', onConfirm);
     cancelBtn.addEventListener('click', onCancel);
-    overlay.addEventListener('click', onOverlay);
     document.addEventListener('keydown', onKey);
     overlay.classList.remove('hidden');
     confirmBtn.focus();
@@ -1202,7 +1200,8 @@ function applyBulkFormat(plainText, fmt) {
 }
 
 document.getElementById('createModalCancelBtn').addEventListener('click', closeOverlays);
-document.getElementById('createModalOverlay').addEventListener('click', (e) => { if (e.target.id === 'createModalOverlay') closeOverlays(); });
+// Deliberately no backdrop-click-to-dismiss here -- Cancel is the only way out, so an accidental
+// click outside the modal never silently drops in-progress form input.
 
 document.getElementById('createModalSubmitBtn').addEventListener('click', async () => {
   const btn = document.getElementById('createModalSubmitBtn');
@@ -1490,7 +1489,6 @@ function openPickModal(kind) {
 
 document.getElementById('pickModalFilter').addEventListener('input', renderPickList);
 document.getElementById('pickModalCancelBtn').addEventListener('click', closeOverlays);
-document.getElementById('pickModalOverlay').addEventListener('click', (e) => { if (e.target.id === 'pickModalOverlay') closeOverlays(); });
 
 document.getElementById('pickModalApplyBtn').addEventListener('click', async () => {
   const btn = document.getElementById('pickModalApplyBtn');
@@ -1758,9 +1756,6 @@ async function openFlowOutcomeModal(item) {
 
 document.getElementById('flowOutcomesNewBtn').addEventListener('click', () => openFlowOutcomeModal(null));
 document.getElementById('flowOutcomeModalCancelBtn').addEventListener('click', closeOverlays);
-document.getElementById('flowOutcomeModalOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'flowOutcomeModalOverlay') closeOverlays();
-});
 
 document.getElementById('flowOutcomeModalSubmitBtn').addEventListener('click', async () => {
   const nameInput = document.getElementById('flowOutcomeNameInput');
@@ -1811,9 +1806,6 @@ document.getElementById('flowOutcomesBulkAddBtn').addEventListener('click', () =
   document.getElementById('flowOutcomeBulkModalOverlay').classList.remove('hidden');
 });
 document.getElementById('flowOutcomeBulkCancelBtn').addEventListener('click', closeOverlays);
-document.getElementById('flowOutcomeBulkModalOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'flowOutcomeBulkModalOverlay') closeOverlays();
-});
 
 document.getElementById('flowOutcomeBulkSubmitBtn').addEventListener('click', async () => {
   const lines = parseLines(document.getElementById('flowOutcomeBulkInput').value);
@@ -2848,9 +2840,6 @@ document.getElementById('queueSlaBackBtn').addEventListener('click', () => {
   setQueueSlaView('edit');
 });
 document.getElementById('queueSlaConfirmBtn').addEventListener('click', confirmQueueSlaApply);
-document.getElementById('queueSlaModalOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'queueSlaModalOverlay') document.getElementById('queueSlaModalOverlay').classList.add('hidden');
-});
 
 // ---- Queue Default Scripts bulk edit ---------------------------------------
 // Each queue can have a default Script per media type (the script an agent's UI loads for an
@@ -3064,9 +3053,6 @@ document.getElementById('queueScriptsBackBtn').addEventListener('click', () => {
   setQueueScriptsView('edit');
 });
 document.getElementById('queueScriptsConfirmBtn').addEventListener('click', confirmQueueScriptsApply);
-document.getElementById('queueScriptsModalOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'queueScriptsModalOverlay') document.getElementById('queueScriptsModalOverlay').classList.add('hidden');
-});
 
 // ---- Interactions (disconnect live interactions) ---------------------------
 // Genesys has no "list active conversations by queue" endpoint in the core Conversations API, so
@@ -3842,9 +3828,6 @@ document.getElementById('usersEmailMappingFile').addEventListener('change', asyn
   document.getElementById('usersEmailMappingText').value = await file.text();
 });
 document.getElementById('usersEmailModalCancelBtn').addEventListener('click', () => document.getElementById('usersEmailModalOverlay').classList.add('hidden'));
-document.getElementById('usersEmailModalOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'usersEmailModalOverlay') document.getElementById('usersEmailModalOverlay').classList.add('hidden');
-});
 
 document.getElementById('usersEmailModalApplyBtn').addEventListener('click', async () => {
   if (!usersEmailPendingChanges || !usersEmailPendingChanges.length) {
@@ -4088,9 +4071,6 @@ async function openUserDetail(user) {
 }
 
 document.getElementById('userModalCloseBtn').addEventListener('click', () => document.getElementById('userModalOverlay').classList.add('hidden'));
-document.getElementById('userModalOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'userModalOverlay') document.getElementById('userModalOverlay').classList.add('hidden');
-});
 
 // ---- Skills & Routing ----------------------------------------------------
 
@@ -5278,9 +5258,6 @@ async function reloadPromptLanguagesModal(promptId) {
 }
 
 document.getElementById('promptModalCloseBtn').addEventListener('click', () => document.getElementById('promptModalOverlay').classList.add('hidden'));
-document.getElementById('promptModalOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'promptModalOverlay') document.getElementById('promptModalOverlay').classList.add('hidden');
-});
 document.getElementById('promptModalExportBtn').addEventListener('click', async () => {
   const promptId = document.getElementById('promptModalOverlay').dataset.promptId;
   const target = architectPromptsState.items.find((p) => p.id === promptId);
@@ -6188,9 +6165,6 @@ document.getElementById('evalFormNewBtn').addEventListener('click', () => openEv
 
 document.getElementById('evalFormModalCancelBtn').addEventListener('click', () => {
   document.getElementById('evalFormModalOverlay').classList.add('hidden');
-});
-document.getElementById('evalFormModalOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'evalFormModalOverlay') document.getElementById('evalFormModalOverlay').classList.add('hidden');
 });
 
 document.getElementById('evalFormExportBtn').addEventListener('click', () => {
