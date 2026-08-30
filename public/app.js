@@ -2002,9 +2002,29 @@ const queuesResource = createListResource({
     return row;
   },
   onLoaded: () => queuesResource.render(),
+  onRender: (filtered) => {
+    queuesVisibleIds = filtered.map((q) => q.id);
+    updateQueuesSelectAllCheckbox();
+  },
 });
 
 const selectedQueueIds = new Set();
+let queuesVisibleIds = []; // ids currently shown after filtering, kept in sync via onRender above
+
+// Checked when every currently-visible (filtered) queue is selected -- not just "some" -- so it
+// never falsely implies "all" when the filter has hidden already-selected queues elsewhere in
+// the list, and unchecks itself the moment any visible queue is deselected one at a time.
+function updateQueuesSelectAllCheckbox() {
+  const checkbox = document.getElementById('queuesSelectAllCheckbox');
+  checkbox.checked = queuesVisibleIds.length > 0 && queuesVisibleIds.every((id) => selectedQueueIds.has(id));
+}
+
+document.getElementById('queuesSelectAllCheckbox').addEventListener('change', (e) => {
+  if (e.target.checked) queuesVisibleIds.forEach((id) => selectedQueueIds.add(id));
+  else queuesVisibleIds.forEach((id) => selectedQueueIds.delete(id));
+  queuesResource.render();
+  refreshManagedQueuePanels();
+});
 
 function toggleQueueSelection(queueId) {
   if (selectedQueueIds.has(queueId)) selectedQueueIds.delete(queueId); else selectedQueueIds.add(queueId);
