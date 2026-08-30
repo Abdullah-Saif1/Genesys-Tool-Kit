@@ -109,6 +109,7 @@
           <div class="nav-item" data-tab="users">Users &amp; Divisions</div>
           <div class="nav-group-title">Automation</div>
           <div class="nav-item" data-tab="architect">Architect</div>
+          <div class="nav-item" data-tab="flowoutcomes">Flow Outcomes</div>
           <div class="nav-item" data-tab="schedules">Schedules</div>
           <div class="nav-item" data-tab="dataactions">Data Actions</div>
           <div class="nav-group-title">Compliance</div>
@@ -557,6 +558,38 @@
               </div>
 
             </div>
+          </section>
+
+          <!-- Flow Outcomes -->
+          <section id="tab-flowoutcomes" class="tab-panel hidden">
+            <div class="notice-box" style="margin-bottom:14px">
+              Named outcomes that Architect flows can report success or failure against, for self-service performance
+              tracking. Genesys lets you create and rename outcomes but <b>not delete them</b> &mdash; there is no
+              delete API for this resource, so double-check names before creating. Most orgs are limited to 100
+              outcomes. There's no Genesys-native export/import file format for outcomes (unlike Data Actions), so
+              export/import here uses plain JSON.
+            </div>
+
+            <div class="toolbar-row">
+              <input type="search" id="flowOutcomesFilter" class="text-input filter-input" style="padding:9px 12px;font-size:12.5px" placeholder="&#128269;  Filter outcomes&hellip;" />
+              <button id="flowOutcomesBulkAddBtn" class="btn btn-subtle">Bulk add&hellip;</button>
+              <input type="file" id="flowOutcomesImportFile" accept="application/json" class="hidden" />
+              <button id="flowOutcomesImportBtn" class="btn btn-subtle">&#8593; Import</button>
+              <button id="flowOutcomesExportAllBtn" class="btn btn-subtle">&#8595; Export all</button>
+              <button id="flowOutcomesNewBtn" class="btn btn-accent" style="padding:9px 15px;font-size:12.5px">+ New outcome</button>
+            </div>
+
+            <div class="grid-table" style="grid-template-columns:1.2fr 2fr 1fr auto">
+              <div class="grid-head" style="grid-template-columns:1.2fr 2fr 1fr auto">Name<span>Description</span><span>Division</span><span></span></div>
+              <div id="flowOutcomesTableBody"></div>
+              <p id="flowOutcomesEmpty" class="empty-note hidden">No flow outcomes yet.</p>
+            </div>
+            <div id="flowOutcomesError" class="alert alert-danger hidden" style="margin-top:10px">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+              <span id="flowOutcomesErrorText"></span>
+            </div>
+            <button id="flowOutcomesLoadMoreBtn" class="btn btn-outline hidden" style="margin-top:12px">Load more</button>
+            <div id="flowOutcomesResults" class="bulk-results"></div>
           </section>
 
           <!-- Schedules -->
@@ -1050,6 +1083,52 @@
           <span class="count" id="pickModalCount"></span>
           <button id="pickModalCancelBtn" class="btn btn-outline">Cancel</button>
           <button id="pickModalApplyBtn" class="btn btn-accent"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Flow Outcome create/edit ===== -->
+    <div id="flowOutcomeModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-head">
+          <div class="title" id="flowOutcomeModalTitle">New outcome</div>
+        </div>
+        <div class="modal-body">
+          <div>
+            <div class="field-label">Name</div>
+            <input type="text" id="flowOutcomeNameInput" class="text-input" placeholder="e.g. Payment Completed" />
+            <p id="flowOutcomeNameError" class="field-inline-error hidden" style="margin-top:4px"></p>
+          </div>
+          <div>
+            <div class="field-label">Description (optional)</div>
+            <textarea id="flowOutcomeDescInput" class="text-input" rows="3" placeholder="What does this outcome represent?"></textarea>
+          </div>
+          <div>
+            <div class="field-label">Division</div>
+            <select id="flowOutcomeDivisionInput" class="text-input"></select>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="flowOutcomeModalCancelBtn" class="btn btn-outline">Cancel</button>
+          <button id="flowOutcomeModalSubmitBtn" class="btn btn-accent">Create outcome</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Flow Outcome bulk add ===== -->
+    <div id="flowOutcomeBulkModalOverlay" class="modal-overlay hidden">
+      <div class="modal-card wide">
+        <div class="modal-head">
+          <div class="title">Bulk add outcomes</div>
+          <div class="sub">One outcome per line, formatted as Name | Description (description optional)</div>
+        </div>
+        <div class="modal-body">
+          <textarea id="flowOutcomeBulkInput" class="text-input" rows="8" placeholder="Payment Completed | Customer successfully completed a payment&#10;Callback Requested"></textarea>
+          <div id="flowOutcomeBulkResults" class="bulk-results"></div>
+        </div>
+        <div class="modal-foot">
+          <button id="flowOutcomeBulkCancelBtn" class="btn btn-outline">Cancel</button>
+          <button id="flowOutcomeBulkSubmitBtn" class="btn btn-accent">Bulk create</button>
         </div>
       </div>
     </div>
