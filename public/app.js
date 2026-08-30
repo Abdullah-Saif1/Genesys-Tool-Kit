@@ -1379,7 +1379,11 @@ async function submitSingleEdit(kind, item, name, text, divisionId, scheduleExtr
     skillsResource.remove(item.id);
     skillsResource.prepend(updated);
   } else if (kind === 'queue') {
-    const updated = await proxy('PATCH', `/api/v2/routing/queues/${item.id}`, { body: { name } });
+    // PUT, not PATCH -- confirmed against Genesys's own API spec: /routing/queues/{id} only
+    // supports GET/PUT/DELETE, no PATCH method exists on it at all. QueueRequest only requires
+    // `name`, so a body with just the field(s) actually changing updates in place rather than
+    // wiping the rest of the queue's config, despite the PUT verb.
+    const updated = await proxy('PUT', `/api/v2/routing/queues/${item.id}`, { body: { name } });
     queuesResource.remove(item.id);
     queuesResource.prepend(updated);
   } else if (kind === 'schedule') {
@@ -2454,7 +2458,9 @@ async function loadQueueLibraryConfig(queueId) {
 async function saveLibraryMode(queueIds, mode, libraryIds) {
   const body = { cannedResponseLibraries: Object.assign({ mode }, mode === 'Selected' ? { libraryIds } : {}) };
   for (const queueId of queueIds) {
-    await proxy('PATCH', `/api/v2/routing/queues/${queueId}`, { body });
+    // PUT, not PATCH -- see the note by the SLA/Scripts bulk-apply calls below; same endpoint,
+    // same fix.
+    await proxy('PUT', `/api/v2/routing/queues/${queueId}`, { body });
   }
   if (mode === 'Selected') currentQueueLibraryIds = libraryIds;
 }
@@ -2734,7 +2740,12 @@ async function confirmQueueSlaApply() {
               c.alertingSeconds != null ? { alertingTimeoutSeconds: c.alertingSeconds } : {}
             );
           });
-          await proxy('PATCH', `/api/v2/routing/queues/${q.id}`, { body: { mediaSettings } });
+          // PUT, not PATCH -- confirmed against Genesys's own API spec: this endpoint only
+          // supports GET/PUT/DELETE. A PATCH here was silently failing for every queue (rejected
+          // as an unsupported method), which is why bulk SLA changes appeared to do nothing at
+          // all -- QueueRequest only requires `name`, so sending just mediaSettings still updates
+          // in place rather than wiping the rest of the queue's config.
+          await proxy('PUT', `/api/v2/routing/queues/${q.id}`, { body: { mediaSettings } });
           results.push({ ok: true, label: q.name });
         } catch (err) {
           results.push({ ok: false, label: q.name, message: err.message });
@@ -3043,7 +3054,9 @@ async function confirmQueueScriptsApply() {
         queueScriptsPendingChanges.forEach((c) => {
           defaultScripts[c.key] = c.scriptId ? { id: c.scriptId } : null;
         });
-        await proxy('PATCH', `/api/v2/routing/queues/${q.id}`, { body: { defaultScripts } });
+        // PUT, not PATCH -- same fix as the SLA bulk-apply call, same reason: no PATCH method
+        // exists on this endpoint per Genesys's spec.
+        await proxy('PUT', `/api/v2/routing/queues/${q.id}`, { body: { defaultScripts } });
         results.push({ ok: true, label: q.name });
       } catch (err) {
         results.push({ ok: false, label: q.name, message: err.message });
@@ -6482,6 +6495,13 @@ async function loadAuditTab() {
 // history, newest first. Update this array when shipping something worth calling out.
 
 const RELEASE_NOTES = [
+  {
+    date: '2026-08-30',
+    title: 'Fixed: bulk queue updates were silently failing',
+    items: [
+      "Bulk SLA / Service Level edits, bulk Default Scripts edits, single-queue rename, and Canned Response Library assignment were all sending PATCH to an endpoint that only accepts GET, PUT, or DELETE -- Genesys was rejecting every one of these calls, which is why applying SLA changes across multiple queues appeared to do nothing at all. Switched all four to PUT.",
+    ],
+  },
   {
     date: '2026-08-30',
     title: 'New Flow Outcomes module',
