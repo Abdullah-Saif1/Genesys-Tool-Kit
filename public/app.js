@@ -185,15 +185,67 @@ function showToast(message, isError) {
   toastTimer = setTimeout(() => toast.classList.add('hidden'), 3200);
 }
 
+// ---- Global progress bar --------------------------------------------------
+// Reference-counted so concurrent/nested withBusy() calls share one bar and it only hides once
+// every one of them has actually finished -- starting a second busy action while the first is
+// still running (or one busy action awaiting another) never makes the bar disappear early.
+let globalProgressActive = 0;
+let globalProgressFraction = 0;
+let globalProgressTrickleTimer = null;
+
+function startGlobalProgress() {
+  globalProgressActive += 1;
+  if (globalProgressActive > 1) return; // already showing -- this call shares it
+  globalProgressFraction = 0;
+  const fill = document.getElementById('globalProgressBarFill');
+  fill.style.transition = 'none';
+  fill.style.width = '0%';
+  void fill.offsetWidth; // force reflow so the width transition re-enables cleanly from here
+  fill.style.transition = '';
+  document.getElementById('globalProgressBar').classList.remove('hidden');
+
+  // Simulated "trickle" for the common case of a single API call with no real progress signal:
+  // eases toward 90% and holds there so it never visually finishes before the action actually
+  // has -- a real setProgress() call (passed into every withBusy fn) simply overrides wherever
+  // the trickle has gotten to, since actual data beats a guess.
+  clearInterval(globalProgressTrickleTimer);
+  globalProgressTrickleTimer = setInterval(() => {
+    if (globalProgressFraction >= 0.9) return;
+    setGlobalProgress(globalProgressFraction + (0.9 - globalProgressFraction) * 0.15);
+  }, 200);
+}
+
+function setGlobalProgress(fraction) {
+  globalProgressFraction = Math.max(globalProgressFraction, Math.min(fraction, 0.99));
+  document.getElementById('globalProgressBarFill').style.width = `${Math.round(globalProgressFraction * 100)}%`;
+}
+
+function finishGlobalProgress() {
+  globalProgressActive = Math.max(0, globalProgressActive - 1);
+  if (globalProgressActive > 0) return; // other busy operations still in flight -- keep it up
+  clearInterval(globalProgressTrickleTimer);
+  document.getElementById('globalProgressBarFill').style.width = '100%';
+  setTimeout(() => {
+    if (globalProgressActive > 0) return; // another one started during the fade-out
+    document.getElementById('globalProgressBar').classList.add('hidden');
+    document.getElementById('globalProgressBarFill').style.width = '0%';
+  }, 250);
+}
+
+// fn receives a setProgress(fraction) callback -- callers looping over a known number of items
+// (bulk-add, import, export-all, bulk-disconnect) call it with current/total for real progress;
+// everything else can just ignore the parameter and gets the simulated trickle for free.
 async function withBusy(button, busyLabel, fn) {
   const originalLabel = button.textContent;
   button.disabled = true;
   button.textContent = busyLabel;
+  startGlobalProgress();
   try {
-    return await fn();
+    return await fn(setGlobalProgress);
   } finally {
     button.disabled = false;
     button.textContent = originalLabel;
+    finishGlobalProgress();
   }
 }
 
@@ -1215,8 +1267,8 @@ document.getElementById('createModalSubmitBtn').addEventListener('click', async 
   } else {
     const lines = parseLines(document.getElementById('createBulkInput').value);
     if (!lines.length) return;
-    await withBusy(btn, `Creating ${lines.length}…`, async () => {
-      const results = await submitBulkCreate(activeCreateKind, lines);
+    await withBusy(btn, `Creating ${lines.length}…`, async (setProgress) => {
+      const results = await submitBulkCreate(activeCreateKind, lines, setProgress);
       renderBulkResults('createBulkResults', results);
       document.getElementById('createBulkInput').value = '';
     });
@@ -1268,18 +1320,19 @@ async function submitSingleCreate(kind, name, text, divisionId, scheduleExtra, d
   }
 }
 
-async function submitBulkCreate(kind, lines) {
+async function submitBulkCreate(kind, lines, setProgress) {
   const results = [];
+  const reportProgress = () => { if (setProgress) setProgress(results.length / lines.length); };
   if (kind === 'canned') {
     const libraryId = document.getElementById('cannedLibrarySelect').value;
     if (!libraryId) { showToast('Create or select a library first.', true); return []; }
     const fmt = currentBulkFormat();
     for (const line of lines) {
       const sep = line.indexOf('|');
-      if (sep === -1) { results.push({ label: line, ok: false, message: 'expected "Name | Response text"' }); continue; }
+      if (sep === -1) { results.push({ label: line, ok: false, message: 'expected "Name | Response text"' }); reportProgress(); continue; }
       const name = line.slice(0, sep).trim();
       const plainText = line.slice(sep + 1).trim();
-      if (!name || !plainText) { results.push({ label: line, ok: false, message: 'name and text are both required' }); continue; }
+      if (!name || !plainText) { results.push({ label: line, ok: false, message: 'name and text are both required' }); reportProgress(); continue; }
       try {
         const content = applyBulkFormat(plainText, fmt);
         const created = await proxy('POST', '/api/v2/responsemanagement/responses', {
@@ -1290,6 +1343,7 @@ async function submitBulkCreate(kind, lines) {
       } catch (err) {
         results.push({ label: name, ok: false, message: err.message });
       }
+      reportProgress();
     }
   } else if (kind === 'wrapup') {
     for (const name of lines) {
@@ -1301,6 +1355,7 @@ async function submitBulkCreate(kind, lines) {
       } catch (err) {
         results.push({ label: name, ok: false, message: err.message });
       }
+      reportProgress();
     }
   }
   return results;
@@ -1457,16 +1512,16 @@ document.getElementById('pickModalApplyBtn').addEventListener('click', async () 
   const queueIds = getSelectedQueueIds();
   if (!queueIds.length) { showToast('Select at least one queue first.', true); return; }
 
-  await withBusy(btn, 'Saving…', async () => {
+  await withBusy(btn, 'Saving…', async (setProgress) => {
     try {
       if (activePickKind === 'members') {
         if (!ids.length) { closeOverlays(); return; }
         if (allUsersCache.length === 0) throw new Error('Load the user directory first.');
-        await bulkAddMembers(queueIds, ids);
+        await bulkAddMembers(queueIds, ids, setProgress);
         showToast(`Added ${ids.length} user(s) to ${queueIds.length === 1 ? 'the queue' : queueIds.length + ' queues'}.`);
       } else if (activePickKind === 'wrapupAssign') {
         if (!ids.length) { closeOverlays(); return; }
-        await bulkAssignWrapupCodes(queueIds, ids);
+        await bulkAssignWrapupCodes(queueIds, ids, setProgress);
         showToast(`Assigned ${ids.length} code(s) to ${queueIds.length === 1 ? 'the queue' : queueIds.length + ' queues'}.`);
       } else if (activePickKind === 'libraryChoose') {
         await saveLibraryMode(queueIds, 'Selected', ids);
@@ -1764,7 +1819,7 @@ document.getElementById('flowOutcomeBulkSubmitBtn').addEventListener('click', as
   const lines = parseLines(document.getElementById('flowOutcomeBulkInput').value);
   if (!lines.length) return;
   const btn = document.getElementById('flowOutcomeBulkSubmitBtn');
-  await withBusy(btn, `Creating ${lines.length}…`, async () => {
+  await withBusy(btn, `Creating ${lines.length}…`, async (setProgress) => {
     const results = [];
     for (const line of lines) {
       const sep = line.indexOf('|');
@@ -1772,6 +1827,7 @@ document.getElementById('flowOutcomeBulkSubmitBtn').addEventListener('click', as
       const description = sep === -1 ? '' : line.slice(sep + 1).trim();
       if (!name) {
         results.push({ label: line, ok: false, message: 'name is required' });
+        setProgress(results.length / lines.length);
         continue;
       }
       try {
@@ -1780,6 +1836,7 @@ document.getElementById('flowOutcomeBulkSubmitBtn').addEventListener('click', as
         const existing = await proxy('GET', '/api/v2/flows/outcomes', { query: { name, pageSize: 25 } });
         if ((existing.entities || []).some((o) => (o.name || '').toLowerCase() === name.toLowerCase())) {
           results.push({ skipped: true, label: name, message: 'already exists — left as-is' });
+          setProgress(results.length / lines.length);
           continue;
         }
         const body = { name };
@@ -1790,6 +1847,7 @@ document.getElementById('flowOutcomeBulkSubmitBtn').addEventListener('click', as
       } catch (err) {
         results.push({ label: name, ok: false, message: err.message });
       }
+      setProgress(results.length / lines.length);
     }
     renderBulkResults('flowOutcomeBulkResults', results);
     document.getElementById('flowOutcomeBulkInput').value = '';
@@ -1801,7 +1859,7 @@ document.getElementById('flowOutcomeBulkSubmitBtn').addEventListener('click', as
 
 document.getElementById('flowOutcomesExportAllBtn').addEventListener('click', async () => {
   const btn = document.getElementById('flowOutcomesExportAllBtn');
-  await withBusy(btn, 'Exporting…', async () => {
+  await withBusy(btn, 'Exporting…', async (setProgress) => {
     try {
       const all = [];
       let pageNumber = 1;
@@ -1810,6 +1868,7 @@ document.getElementById('flowOutcomesExportAllBtn').addEventListener('click', as
         const data = await proxy('GET', '/api/v2/flows/outcomes', { query: { pageNumber, pageSize: 100 } });
         total = data.total || 0;
         all.push(...(data.entities || []));
+        if (total > 0) setProgress(all.length / total);
         if (!data.entities || !data.entities.length) break;
         pageNumber += 1;
       }
@@ -1848,12 +1907,13 @@ document.getElementById('flowOutcomesImportFile').addEventListener('change', asy
   if (!items.length) { showToast('Nothing to import.', true); return; }
 
   const btn = document.getElementById('flowOutcomesImportBtn');
-  await withBusy(btn, 'Importing…', async () => {
+  await withBusy(btn, 'Importing…', async (setProgress) => {
     const results = [];
     for (const item of items) {
       const label = (item && item.name) || '(unnamed)';
       if (!item || !item.name) {
         results.push({ ok: false, label, message: 'missing "name"' });
+        setProgress(results.length / items.length);
         continue;
       }
       try {
@@ -1867,6 +1927,7 @@ document.getElementById('flowOutcomesImportFile').addEventListener('change', asy
         const alreadyExists = (existing.entities || []).some((o) => (o.name || '').toLowerCase() === item.name.toLowerCase());
         if (alreadyExists) {
           results.push({ skipped: true, label: item.name, message: 'already exists — left as-is (outcomes can\'t be deleted or overwritten by import)' });
+          setProgress(results.length / items.length);
           continue;
         }
         // Division is deliberately not sent -- it's org-specific and this file may well be
@@ -1880,6 +1941,7 @@ document.getElementById('flowOutcomesImportFile').addEventListener('change', asy
       } catch (err) {
         results.push({ ok: false, label, message: err.message });
       }
+      setProgress(results.length / items.length);
     }
     renderBulkResults('flowOutcomesResults', results);
     const okCount = results.filter((r) => r.ok).length;
@@ -2148,12 +2210,16 @@ async function loadQueueMembers(queueId) {
   renderMemberChips(queueId);
 }
 
-async function bulkAddMembers(queueIds, userIds) {
+async function bulkAddMembers(queueIds, userIds, setProgress) {
   const batchSize = 100;
+  const totalBatches = queueIds.length * Math.max(1, Math.ceil(userIds.length / batchSize));
+  let done = 0;
   for (const queueId of queueIds) {
     for (let i = 0; i < userIds.length; i += batchSize) {
       const batch = userIds.slice(i, i + batchSize).map((id) => ({ id }));
       await proxy('POST', `/api/v2/routing/queues/${queueId}/members`, { body: batch });
+      done += 1;
+      if (setProgress) setProgress(done / totalBatches);
     }
   }
 }
@@ -2260,12 +2326,16 @@ async function loadQueueWrapupCodes(queueId) {
   renderQueueWrapupChips(queueId);
 }
 
-async function bulkAssignWrapupCodes(queueIds, codeIds) {
+async function bulkAssignWrapupCodes(queueIds, codeIds, setProgress) {
   const batchSize = 100;
+  const totalBatches = queueIds.length * Math.max(1, Math.ceil(codeIds.length / batchSize));
+  let done = 0;
   for (const queueId of queueIds) {
     for (let i = 0; i < codeIds.length; i += batchSize) {
       const batch = codeIds.slice(i, i + batchSize).map((id) => ({ id }));
       await proxy('POST', `/api/v2/routing/queues/${queueId}/wrapupcodes`, { body: batch });
+      done += 1;
+      if (setProgress) setProgress(done / totalBatches);
     }
   }
 }
@@ -2637,26 +2707,28 @@ function renderQueueSlaReview(changes) {
 async function confirmQueueSlaApply() {
   if (!queueSlaPendingChanges || !queueSlaPendingChanges.length) return;
   const btn = document.getElementById('queueSlaConfirmBtn');
-  await withBusy(btn, 'Applying…', async () => {
+  await withBusy(btn, 'Applying…', async (setProgress) => {
     const results = [];
-    for (const q of queueSlaFullQueues) {
+    for (const [index, q] of queueSlaFullQueues.entries()) {
       const relevant = queueSlaPendingChanges.filter((c) => c.queueIds.includes(q.id));
-      if (!relevant.length) continue; // not part of this batch — not a failure, just untouched
-      try {
-        const mediaSettings = Object.assign({}, q.mediaSettings);
-        relevant.forEach((c) => {
-          mediaSettings[c.key] = Object.assign(
-            {},
-            mediaSettings[c.key],
-            { serviceLevel: { percentage: c.percentage, durationMs: c.durationMs } },
-            c.alertingSeconds != null ? { alertingTimeoutSeconds: c.alertingSeconds } : {}
-          );
-        });
-        await proxy('PATCH', `/api/v2/routing/queues/${q.id}`, { body: { mediaSettings } });
-        results.push({ ok: true, label: q.name });
-      } catch (err) {
-        results.push({ ok: false, label: q.name, message: err.message });
-      }
+      if (relevant.length) {
+        try {
+          const mediaSettings = Object.assign({}, q.mediaSettings);
+          relevant.forEach((c) => {
+            mediaSettings[c.key] = Object.assign(
+              {},
+              mediaSettings[c.key],
+              { serviceLevel: { percentage: c.percentage, durationMs: c.durationMs } },
+              c.alertingSeconds != null ? { alertingTimeoutSeconds: c.alertingSeconds } : {}
+            );
+          });
+          await proxy('PATCH', `/api/v2/routing/queues/${q.id}`, { body: { mediaSettings } });
+          results.push({ ok: true, label: q.name });
+        } catch (err) {
+          results.push({ ok: false, label: q.name, message: err.message });
+        }
+      } // else not part of this batch — not a failure, just untouched
+      setProgress((index + 1) / queueSlaFullQueues.length);
     }
     renderBulkResults('queueSlaResults', results);
     const okCount = results.filter((r) => r.ok).length;
@@ -2954,7 +3026,7 @@ function renderQueueScriptsReview(changes) {
 async function confirmQueueScriptsApply() {
   if (!queueScriptsPendingChanges || !queueScriptsPendingChanges.length) return;
   const btn = document.getElementById('queueScriptsConfirmBtn');
-  await withBusy(btn, 'Applying…', async () => {
+  await withBusy(btn, 'Applying…', async (setProgress) => {
     const results = [];
     for (const q of queueScriptsFullQueues) {
       try {
@@ -2967,6 +3039,7 @@ async function confirmQueueScriptsApply() {
       } catch (err) {
         results.push({ ok: false, label: q.name, message: err.message });
       }
+      setProgress(results.length / queueScriptsFullQueues.length);
     }
     renderBulkResults('queueScriptsResults', results);
     const okCount = results.filter((r) => r.ok).length;
@@ -3368,7 +3441,7 @@ function updateInteractionsBulkButtons() {
 
 // Disconnects every participant of each given interaction. Media-agnostic: the same participant
 // PATCH endpoint handles calls, chats, emails, messages and callbacks alike.
-async function disconnectInteractions(list) {
+async function disconnectInteractions(list, setProgress) {
   const results = [];
   for (const item of list) {
     try {
@@ -3380,6 +3453,7 @@ async function disconnectInteractions(list) {
     } catch (err) {
       results.push({ ok: false, label: item.label, message: err.message, conversationId: item.conversationId });
     }
+    if (setProgress) setProgress(results.length / list.length);
   }
   return results;
 }
@@ -3389,9 +3463,10 @@ async function disconnectInteractions(list) {
 // place), but the direct-by-ID flow uses it to know whether to clear its input on success.
 async function runInteractionDisconnect(items, busyEl, busyLabel) {
   let succeededIds = new Set();
-  await withBusy(busyEl, busyLabel, async () => {
+  await withBusy(busyEl, busyLabel, async (setProgress) => {
     const results = await disconnectInteractions(
-      items.map((it) => ({ conversationId: it.conversationId, participantIds: it.participantIds, label: `${it.queueName} (${interactionMediaText(it.mediaTypes)})` }))
+      items.map((it) => ({ conversationId: it.conversationId, participantIds: it.participantIds, label: `${it.queueName} (${interactionMediaText(it.mediaTypes)})` })),
+      setProgress
     );
     renderBulkResults('interactionsResults', results);
     succeededIds = new Set(results.filter((r) => r.ok).map((r) => r.conversationId));
@@ -3786,7 +3861,7 @@ document.getElementById('usersEmailModalApplyBtn').addEventListener('click', asy
   if (!ok) return;
 
   const btn = document.getElementById('usersEmailModalApplyBtn');
-  await withBusy(btn, 'Saving…', async () => {
+  await withBusy(btn, 'Saving…', async (setProgress) => {
     const results = [];
     for (const change of usersEmailPendingChanges) {
       try {
@@ -3797,6 +3872,7 @@ document.getElementById('usersEmailModalApplyBtn').addEventListener('click', asy
       } catch (err) {
         results.push({ ok: false, label: change.user.name, message: err.message });
       }
+      setProgress(results.length / usersEmailPendingChanges.length);
     }
     renderBulkResults('usersEmailResults', results);
     const okCount = results.filter((r) => r.ok).length;
@@ -5001,12 +5077,13 @@ document.getElementById('architectPromptsImportFile').addEventListener('change',
   if (!prompts.length) return showError('architectPromptsError', 'File has no prompts to import.');
 
   const btn = document.getElementById('architectPromptsImportBtn');
-  await withBusy(btn, 'Importing…', async () => {
+  await withBusy(btn, 'Importing…', async (setProgress) => {
     const results = [];
     for (const item of prompts) {
       const name = item && item.name && String(item.name).trim();
       if (!name) {
         results.push({ ok: false, label: '(unnamed)', message: 'missing "name"' });
+        setProgress(results.length / prompts.length);
         continue;
       }
       try {
@@ -5056,6 +5133,7 @@ document.getElementById('architectPromptsImportFile').addEventListener('change',
       } catch (err) {
         results.push({ ok: false, label: name, message: err.message });
       }
+      setProgress(results.length / prompts.length);
     }
     renderArchitectPrompts();
     summaryEl.classList.remove('hidden');
@@ -5551,8 +5629,11 @@ document.getElementById('dataActionsExportSelectedBtn').addEventListener('click'
   const ids = [...selectedDataActionIds];
   if (!ids.length) return;
   const btn = document.getElementById('dataActionsExportSelectedBtn');
-  await withBusy(btn, 'Exporting…', async () => {
-    const results = await Promise.allSettled(ids.map((id) => fetchFullDataAction(id)));
+  await withBusy(btn, 'Exporting…', async (setProgress) => {
+    let completed = 0;
+    const results = await Promise.allSettled(
+      ids.map((id) => fetchFullDataAction(id).finally(() => setProgress(++completed / ids.length)))
+    );
     const ok = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
     const failedCount = results.length - ok.length;
     if (ok.length) await downloadJsonAsZipOrSingle(ok.map(dataActionExportItem), 'data-actions-selected');
@@ -5567,10 +5648,11 @@ document.getElementById('dataActionsExportSelectedBtn').addEventListener('click'
 
 document.getElementById('dataActionsExportAllBtn').addEventListener('click', async () => {
   const btn = document.getElementById('dataActionsExportAllBtn');
-  await withBusy(btn, 'Exporting…', async () => {
+  await withBusy(btn, 'Exporting…', async (setProgress) => {
     try {
       // Walks every page independent of what's already loaded on screen, so "export all" really
-      // means every data action in the org.
+      // means every data action in the org. Two phases share the bar: listing pages (0-50%),
+      // then fetching each action's full definition (50-100%).
       const all = [];
       let pageNumber = 1;
       let total = Infinity;
@@ -5578,10 +5660,14 @@ document.getElementById('dataActionsExportAllBtn').addEventListener('click', asy
         const data = await proxy('GET', '/api/v2/integrations/actions', { query: { pageNumber, pageSize: 50 } });
         total = data.total || 0;
         all.push(...(data.entities || []));
+        if (total > 0) setProgress((all.length / total) * 0.5);
         if (!data.entities || !data.entities.length) break;
         pageNumber += 1;
       }
-      const results = await Promise.allSettled(all.map((a) => fetchFullDataAction(a.id)));
+      let completed = 0;
+      const results = await Promise.allSettled(
+        all.map((a) => fetchFullDataAction(a.id).finally(() => setProgress(0.5 + (++completed / (all.length || 1)) * 0.5)))
+      );
       const ok = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
       const failedCount = results.length - ok.length;
       if (ok.length) await downloadJsonAsZipOrSingle(ok.map(dataActionExportItem), 'data-actions-all');
@@ -5655,12 +5741,13 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
   if (!items.length) { showToast('Nothing to import.', true); return; }
 
   const btn = document.getElementById('dataActionsImportBtn');
-  await withBusy(btn, 'Importing…', async () => {
+  await withBusy(btn, 'Importing…', async (setProgress) => {
     const results = [];
     for (const item of items) {
       const label = (item && item.name) || '(unnamed)';
       if (!item || !item.name || !item.contract || !item.config) {
         results.push({ ok: false, label, message: 'missing "name", "contract", or "config"' });
+        setProgress(results.length / items.length);
         continue;
       }
       // GET returns contract.input/output shaped as ActionInput/ActionOutput (inputSchemaUri,
@@ -5674,6 +5761,7 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
       const successSchema = item.contract.output && item.contract.output.successSchema;
       if (!inputSchema || !successSchema) {
         results.push({ ok: false, label, message: 'contract is missing input.inputSchema or output.successSchema' });
+        setProgress(results.length / items.length);
         continue;
       }
       try {
@@ -5692,6 +5780,7 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
       } catch (err) {
         results.push({ ok: false, label, message: err.message });
       }
+      setProgress(results.length / items.length);
     }
     renderBulkResults('dataActionsResults', results);
     const okCount = results.filter((r) => r.ok).length;
@@ -6166,16 +6255,18 @@ document.getElementById('evalFormImportFile').addEventListener('change', async (
   if (!forms.length) return showAlertError('evalFormsError', 'File has no forms to import.');
 
   const btn = document.getElementById('evalFormImportBtn');
-  await withBusy(btn, 'Importing…', async () => {
+  await withBusy(btn, 'Importing…', async (setProgress) => {
     const results = [];
     for (const item of forms) {
       const name = item && item.name && String(item.name).trim();
       if (!name) {
         results.push({ ok: false, label: '(unnamed)', message: 'missing "name"' });
+        setProgress(results.length / forms.length);
         continue;
       }
       if (!Array.isArray(item.questionGroups) || !item.questionGroups.length) {
         results.push({ ok: false, label: name, message: 'missing "questionGroups"' });
+        setProgress(results.length / forms.length);
         continue;
       }
       try {
@@ -6186,6 +6277,7 @@ document.getElementById('evalFormImportFile').addEventListener('change', async (
       } catch (err) {
         results.push({ ok: false, label: name, message: err.message });
       }
+      setProgress(results.length / forms.length);
     }
     summaryEl.classList.remove('hidden');
     renderBulkResults('evalFormsImportSummary', results);

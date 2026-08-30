@@ -80,6 +80,15 @@
 
 * { box-sizing: border-box; }
 
+/* ---- Global progress bar -- shown for the duration of any withBusy() action ---- */
+.global-progress {
+  position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 100; pointer-events: none;
+}
+.global-progress-fill {
+  height: 100%; width: 0%; background: var(--accent); transition: width .2s ease;
+  box-shadow: 0 0 8px rgba(232, 85, 30, .55);
+}
+
 /* Visible focus ring for keyboard navigation, on every interactive element. Uses :focus-visible
    so mouse/touch clicks stay quiet and only keyboard (and assistive-tech) focus shows the ring. */
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
