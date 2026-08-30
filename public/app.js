@@ -667,7 +667,20 @@ function setAuthenticated(isAuthenticated, region) {
   document.getElementById('view-shell').classList.toggle('hidden', !isAuthenticated);
 
   if (isAuthenticated) {
-    document.getElementById('statusRegionLabel').textContent = region;
+    const regionLabel = document.getElementById('statusRegionLabel');
+    regionLabel.textContent = region;
+    // Fire-and-forget -- the region alone (already shown above) is still useful if this fails
+    // (e.g. the OAuth client lacks whatever scope covers organization info), so this never blocks
+    // the rest of the authenticated view from loading.
+    proxy('GET', '/api/v2/organizations/me')
+      .then((org) => {
+        if (org.name) {
+          const text = `${org.name} · ${region}`;
+          regionLabel.textContent = text;
+          regionLabel.title = text;
+        }
+      })
+      .catch(() => {});
     setActiveTab('overview');
   } else {
     lazyLoaded.clear();
