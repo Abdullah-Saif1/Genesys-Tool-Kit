@@ -1392,11 +1392,10 @@ async function submitSingleEdit(kind, item, name, text, divisionId, scheduleExtr
     skillsResource.remove(item.id);
     skillsResource.prepend(updated);
   } else if (kind === 'queue') {
-    // PUT, not PATCH -- confirmed against Genesys's own API spec: /routing/queues/{id} only
-    // supports GET/PUT/DELETE, no PATCH method exists on it at all. QueueRequest only requires
-    // `name`, so a body with just the field(s) actually changing updates in place rather than
-    // wiping the rest of the queue's config, despite the PUT verb.
-    const updated = await proxy('PUT', `/api/v2/routing/queues/${item.id}`, { body: { name } });
+    // Goes through updateQueueFields so the rename is applied on top of the queue's full current
+    // state -- a bare `{ name }` PUT would satisfy the schema but, being a replace, risks
+    // clearing every other setting on the queue. See updateQueueFields for the full reasoning.
+    const updated = await updateQueueFields(item.id, { name });
     queuesResource.remove(item.id);
     queuesResource.prepend(updated);
   } else if (kind === 'schedule') {
@@ -2028,6 +2027,22 @@ const queuesResource = createListResource({
 const selectedQueueIds = new Set();
 let queuesVisibleIds = []; // ids currently shown after filtering, kept in sync via onRender above
 
+// The ONLY way to update a queue: PUT /routing/queues/{id}. There is no PATCH on this endpoint
+// (confirmed against Genesys's OpenAPI spec -- it exposes only GET/PUT/DELETE), and PUT replaces
+// the whole resource. Two consequences, both of which earlier versions of this code got wrong:
+//   1. `name` is REQUIRED by the QueueRequest body schema, so a partial body like
+//      `{ mediaSettings }` is rejected outright -- which is exactly why bulk SLA/Scripts edits
+//      appeared to do nothing at all for every queue.
+//   2. Even if it were accepted, a partial body risks clearing everything it omits (routing
+//      rules, bullseye, ACW settings, flows, ...) since this is a replace, not a merge.
+// So every update sends the queue's COMPLETE current state with only the changed fields
+// overridden. `fullQueue` lets callers that already fetched the full object (the SLA and Scripts
+// bulk editors both do, when their modal opens) skip a redundant GET.
+async function updateQueueFields(queueId, changes, fullQueue) {
+  const current = fullQueue || (await proxy('GET', `/api/v2/routing/queues/${queueId}`));
+  return proxy('PUT', `/api/v2/routing/queues/${queueId}`, { body: Object.assign({}, current, changes) });
+}
+
 // Checked when every currently-visible (filtered) queue is selected -- not just "some" -- so it
 // never falsely implies "all" when the filter has hidden already-selected queues elsewhere in
 // the list, and unchecks itself the moment any visible queue is deselected one at a time.
@@ -2469,11 +2484,11 @@ async function loadQueueLibraryConfig(queueId) {
 }
 
 async function saveLibraryMode(queueIds, mode, libraryIds) {
-  const body = { cannedResponseLibraries: Object.assign({ mode }, mode === 'Selected' ? { libraryIds } : {}) };
+  const cannedResponseLibraries = Object.assign({ mode }, mode === 'Selected' ? { libraryIds } : {});
+  // One request per queue, sequentially -- no bulk endpoint exists. updateQueueFields fetches
+  // each queue's current state first so this replaces only the library config, not the queue.
   for (const queueId of queueIds) {
-    // PUT, not PATCH -- see the note by the SLA/Scripts bulk-apply calls below; same endpoint,
-    // same fix.
-    await proxy('PUT', `/api/v2/routing/queues/${queueId}`, { body });
+    await updateQueueFields(queueId, { cannedResponseLibraries });
   }
   if (mode === 'Selected') currentQueueLibraryIds = libraryIds;
 }
@@ -2740,31 +2755,28 @@ async function confirmQueueSlaApply() {
   const btn = document.getElementById('queueSlaConfirmBtn');
   await withBusy(btn, 'Applying…', async (setProgress) => {
     const results = [];
-    for (const [index, q] of queueSlaFullQueues.entries()) {
+    // One request per queue, sequentially -- Genesys has no bulk/multi-queue update endpoint, so
+    // there's nothing to batch into a single call. Progress ticks after each queue completes.
+    const targets = queueSlaFullQueues.filter((q) => queueSlaPendingChanges.some((c) => c.queueIds.includes(q.id)));
+    for (const [index, q] of targets.entries()) {
+      btn.textContent = `Applying… (${index + 1}/${targets.length})`;
       const relevant = queueSlaPendingChanges.filter((c) => c.queueIds.includes(q.id));
-      if (relevant.length) {
-        try {
-          const mediaSettings = Object.assign({}, q.mediaSettings);
-          relevant.forEach((c) => {
-            mediaSettings[c.key] = Object.assign(
-              {},
-              mediaSettings[c.key],
-              { serviceLevel: { percentage: c.percentage, durationMs: c.durationMs } },
-              c.alertingSeconds != null ? { alertingTimeoutSeconds: c.alertingSeconds } : {}
-            );
-          });
-          // PUT, not PATCH -- confirmed against Genesys's own API spec: this endpoint only
-          // supports GET/PUT/DELETE. A PATCH here was silently failing for every queue (rejected
-          // as an unsupported method), which is why bulk SLA changes appeared to do nothing at
-          // all -- QueueRequest only requires `name`, so sending just mediaSettings still updates
-          // in place rather than wiping the rest of the queue's config.
-          await proxy('PUT', `/api/v2/routing/queues/${q.id}`, { body: { mediaSettings } });
-          results.push({ ok: true, label: q.name });
-        } catch (err) {
-          results.push({ ok: false, label: q.name, message: err.message });
-        }
-      } // else not part of this batch — not a failure, just untouched
-      setProgress((index + 1) / queueSlaFullQueues.length);
+      try {
+        const mediaSettings = Object.assign({}, q.mediaSettings);
+        relevant.forEach((c) => {
+          mediaSettings[c.key] = Object.assign(
+            {},
+            mediaSettings[c.key],
+            { serviceLevel: { percentage: c.percentage, durationMs: c.durationMs } },
+            c.alertingSeconds != null ? { alertingTimeoutSeconds: c.alertingSeconds } : {}
+          );
+        });
+        await updateQueueFields(q.id, { mediaSettings }, q);
+        results.push({ ok: true, label: q.name });
+      } catch (err) {
+        results.push({ ok: false, label: q.name, message: err.message });
+      }
+      setProgress((index + 1) / targets.length);
     }
     renderBulkResults('queueSlaResults', results);
     const okCount = results.filter((r) => r.ok).length;
@@ -3061,15 +3073,15 @@ async function confirmQueueScriptsApply() {
   const btn = document.getElementById('queueScriptsConfirmBtn');
   await withBusy(btn, 'Applying…', async (setProgress) => {
     const results = [];
-    for (const q of queueScriptsFullQueues) {
+    // One request per queue, sequentially -- no bulk/multi-queue update endpoint exists.
+    for (const [index, q] of queueScriptsFullQueues.entries()) {
+      btn.textContent = `Applying… (${index + 1}/${queueScriptsFullQueues.length})`;
       try {
         const defaultScripts = Object.assign({}, q.defaultScripts);
         queueScriptsPendingChanges.forEach((c) => {
           defaultScripts[c.key] = c.scriptId ? { id: c.scriptId } : null;
         });
-        // PUT, not PATCH -- same fix as the SLA bulk-apply call, same reason: no PATCH method
-        // exists on this endpoint per Genesys's spec.
-        await proxy('PUT', `/api/v2/routing/queues/${q.id}`, { body: { defaultScripts } });
+        await updateQueueFields(q.id, { defaultScripts }, q);
         results.push({ ok: true, label: q.name });
       } catch (err) {
         results.push({ ok: false, label: q.name, message: err.message });
@@ -6510,9 +6522,11 @@ async function loadAuditTab() {
 const RELEASE_NOTES = [
   {
     date: '2026-08-30',
-    title: 'Fixed: bulk queue updates were silently failing',
+    title: 'Fixed: bulk queue updates (SLA, Scripts) were silently failing',
     items: [
-      "Bulk SLA / Service Level edits, bulk Default Scripts edits, single-queue rename, and Canned Response Library assignment were all sending PATCH to an endpoint that only accepts GET, PUT, or DELETE -- Genesys was rejecting every one of these calls, which is why applying SLA changes across multiple queues appeared to do nothing at all. Switched all four to PUT.",
+      "Bulk SLA / Service Level edits, bulk Default Scripts edits, single-queue rename, and Canned Response Library assignment were all failing for every queue. Two compounding causes: they used PATCH, which this Genesys endpoint doesn't support at all (only GET/PUT/DELETE), and they sent only the changed field, which the API rejects because the queue name is always required.",
+      "All four now send the queue's complete current configuration with just the changed field replaced, via PUT. This also matters because PUT replaces the whole queue -- sending a partial update risked clearing routing rules, bullseye, ACW settings and flows on every queue it touched.",
+      'Each queue is updated in its own request, one after another (Genesys has no multi-queue update endpoint), with the progress bar and the button advancing per queue as each one completes.',
     ],
   },
   {
