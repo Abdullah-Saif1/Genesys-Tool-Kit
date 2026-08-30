@@ -528,6 +528,7 @@ const tabLoaders = {
   users: loadUsersAndDivisions,
   skills: () => skillsResource.reset(),
   architect: loadArchitectTab,
+  flowoutcomes: loadFlowOutcomesTab,
   schedules: () => schedulesResource.reset(),
   dataactions: loadDataActionsTab,
   evalforms: () => evalFormsResource.reset(),
@@ -545,6 +546,7 @@ const tabMeta = {
   users: { title: 'Users & Divisions', sub: 'Your organisation directory', create: null, bulk: false },
   skills: { title: 'Skills & Routing', sub: 'ACD skills used for skills-based routing', create: 'New skill', bulk: false },
   architect: { title: 'Architect', sub: 'Flows & prompts, and AI-assisted flow generation', create: null, bulk: false },
+  flowoutcomes: { title: 'Flow Outcomes', sub: 'Named outcomes flows can report success or failure against', create: null, bulk: false },
   schedules: { title: 'Schedules', sub: 'Time periods used by schedule groups and Architect flows', create: 'New schedule', bulk: false },
   dataactions: { title: 'Data Actions', sub: 'Reusable custom REST/function calls invoked from Architect flows', create: null, bulk: false },
   evalforms: { title: 'Evaluation Forms', sub: 'QA scorecards used to evaluate recorded interactions', create: null, bulk: false },
@@ -713,7 +715,8 @@ function paletteActions() {
   const nav = [
     ['overview', 'Overview'],
     ['canned', 'Canned Responses'], ['wrapup', 'Wrap-up Codes'], ['queues', 'Queues'], ['interactions', 'Disconnect Interaction'],
-    ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['schedules', 'Schedules'], ['dataactions', 'Data Actions'],
+    ['skills', 'Skills & Routing'], ['users', 'Users & Divisions'], ['architect', 'Architect'], ['flowoutcomes', 'Flow Outcomes'],
+    ['schedules', 'Schedules'], ['dataactions', 'Data Actions'],
     ['evalforms', 'Evaluation Forms'], ['audit', 'Audit Log'], ['explorer', 'API Explorer'], ['releasenotes', 'Release Notes'],
   ];
   const items = nav.map(([k, l]) => ({ label: `Go to ${l}`, tag: 'Navigate', icon: '→', iconBg: '#4b5b68', run: () => setActiveTab(k) }));
@@ -762,6 +765,8 @@ function closeOverlays() {
   document.getElementById('queueSlaModalOverlay').classList.add('hidden');
   document.getElementById('queueScriptsModalOverlay').classList.add('hidden');
   document.getElementById('usersEmailModalOverlay').classList.add('hidden');
+  document.getElementById('flowOutcomeModalOverlay').classList.add('hidden');
+  document.getElementById('flowOutcomeBulkModalOverlay').classList.add('hidden');
 }
 
 document.getElementById('paletteInput').addEventListener('input', renderPalette);
@@ -1617,6 +1622,240 @@ const schedulesResource = createListResource({
       el('div', { class: 'row-actions' }, [editBtn, del]),
     ]);
   },
+});
+
+// ---- Flow Outcomes -------------------------------------------------------
+// Named outcomes Architect flows report success/failure against (via the flow's own "Set Flow
+// Outcome" action), for self-service performance tracking. Genesys's API only supports create
+// (POST) and rename/redescribe (PUT) -- there is no delete endpoint for this resource at all
+// (confirmed against the API spec and Genesys's own docs: "deletion is not permitted"), so unlike
+// every other list in this app, rows here only ever get an Edit action, never Delete.
+
+const flowOutcomesResource = createListResource({
+  path: '/api/v2/flows/outcomes',
+  pageSize: 50,
+  containerId: 'flowOutcomesTableBody',
+  filterId: 'flowOutcomesFilter',
+  loadMoreId: 'flowOutcomesLoadMoreBtn',
+  emptyId: 'flowOutcomesEmpty',
+  errorId: 'flowOutcomesError',
+  matches: (item, filterText) =>
+    (item.name || '').toLowerCase().includes(filterText) || (item.description || '').toLowerCase().includes(filterText),
+  buildRow: (outcome) => {
+    const divisionName = outcome.division && outcome.division.id === '*' ? 'All divisions' : (outcome.division && outcome.division.name) || '—';
+    const editBtn = el('span', { class: 'row-edit', text: 'Edit' });
+    editBtn.addEventListener('click', () => openFlowOutcomeModal(outcome));
+    return gridRow('1.2fr 2fr 1fr auto', [
+      cellText(outcome.name, 'name'),
+      el('span', {
+        class: 'muted',
+        text: outcome.description || '—',
+        title: outcome.description || '',
+        style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
+      }),
+      cellText(divisionName, 'muted'),
+      el('div', { class: 'row-actions' }, [editBtn]),
+    ]);
+  },
+});
+
+async function loadFlowOutcomesTab() {
+  await flowOutcomesResource.reset();
+}
+
+// ---- create / edit modal ----
+
+let flowOutcomeEditItem = null; // set when editing an existing outcome; null when creating
+
+async function openFlowOutcomeModal(item) {
+  flowOutcomeEditItem = item || null;
+  document.getElementById('flowOutcomeModalTitle').textContent = item ? 'Edit outcome' : 'New outcome';
+  document.getElementById('flowOutcomeModalSubmitBtn').textContent = item ? 'Save' : 'Create outcome';
+  document.getElementById('flowOutcomeNameInput').value = (item && item.name) || '';
+  document.getElementById('flowOutcomeDescInput').value = (item && item.description) || '';
+  const nameError = document.getElementById('flowOutcomeNameError');
+  nameError.textContent = '';
+  nameError.classList.add('hidden');
+
+  await ensureDivisionsCache();
+  const select = document.getElementById('flowOutcomeDivisionInput');
+  select.innerHTML = '';
+  select.appendChild(el('option', { value: '', text: 'All divisions (default)' }));
+  allDivisionsCache.forEach((d) => {
+    const opt = el('option', { value: d.id, text: d.name });
+    if (item && item.division && item.division.id === d.id) opt.selected = true;
+    select.appendChild(opt);
+  });
+
+  document.getElementById('flowOutcomeModalOverlay').classList.remove('hidden');
+  document.getElementById('flowOutcomeNameInput').focus();
+}
+
+document.getElementById('flowOutcomesNewBtn').addEventListener('click', () => openFlowOutcomeModal(null));
+document.getElementById('flowOutcomeModalCancelBtn').addEventListener('click', closeOverlays);
+document.getElementById('flowOutcomeModalOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'flowOutcomeModalOverlay') closeOverlays();
+});
+
+document.getElementById('flowOutcomeModalSubmitBtn').addEventListener('click', async () => {
+  const nameInput = document.getElementById('flowOutcomeNameInput');
+  const name = nameInput.value.trim();
+  const nameError = document.getElementById('flowOutcomeNameError');
+  nameError.classList.add('hidden');
+  if (!name) {
+    nameError.textContent = 'Name is required.';
+    nameError.classList.remove('hidden');
+    return;
+  }
+  const description = document.getElementById('flowOutcomeDescInput').value.trim();
+  const divisionId = document.getElementById('flowOutcomeDivisionInput').value;
+  // PUT replaces the whole resource (same FlowOutcome schema as GET, verified against the API
+  // spec) rather than patching individual fields, so this always sends the complete desired
+  // state read from the form -- never a merge with the stale cached item -- whether creating or
+  // editing.
+  const body = { name };
+  if (description) body.description = description;
+  if (divisionId) body.division = { id: divisionId };
+
+  const btn = document.getElementById('flowOutcomeModalSubmitBtn');
+  await withBusy(btn, flowOutcomeEditItem ? 'Saving…' : 'Creating…', async () => {
+    try {
+      if (flowOutcomeEditItem) {
+        const updated = await proxy('PUT', `/api/v2/flows/outcomes/${flowOutcomeEditItem.id}`, { body });
+        flowOutcomesResource.remove(flowOutcomeEditItem.id);
+        flowOutcomesResource.prepend(updated);
+        showToast(`Saved "${name}".`);
+      } else {
+        const created = await proxy('POST', '/api/v2/flows/outcomes', { body });
+        flowOutcomesResource.prepend(created);
+        showToast(`Created "${name}".`);
+      }
+      closeOverlays();
+    } catch (err) {
+      nameError.textContent = err.message;
+      nameError.classList.remove('hidden');
+    }
+  });
+});
+
+// ---- bulk add ----
+
+document.getElementById('flowOutcomesBulkAddBtn').addEventListener('click', () => {
+  document.getElementById('flowOutcomeBulkInput').value = '';
+  document.getElementById('flowOutcomeBulkResults').innerHTML = '';
+  document.getElementById('flowOutcomeBulkModalOverlay').classList.remove('hidden');
+});
+document.getElementById('flowOutcomeBulkCancelBtn').addEventListener('click', closeOverlays);
+document.getElementById('flowOutcomeBulkModalOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'flowOutcomeBulkModalOverlay') closeOverlays();
+});
+
+document.getElementById('flowOutcomeBulkSubmitBtn').addEventListener('click', async () => {
+  const lines = parseLines(document.getElementById('flowOutcomeBulkInput').value);
+  if (!lines.length) return;
+  const btn = document.getElementById('flowOutcomeBulkSubmitBtn');
+  await withBusy(btn, `Creating ${lines.length}…`, async () => {
+    const results = [];
+    for (const line of lines) {
+      const sep = line.indexOf('|');
+      const name = (sep === -1 ? line : line.slice(0, sep)).trim();
+      const description = sep === -1 ? '' : line.slice(sep + 1).trim();
+      if (!name) {
+        results.push({ label: line, ok: false, message: 'name is required' });
+        continue;
+      }
+      try {
+        const body = { name };
+        if (description) body.description = description;
+        const created = await proxy('POST', '/api/v2/flows/outcomes', { body });
+        flowOutcomesResource.prepend(created);
+        results.push({ label: name, ok: true });
+      } catch (err) {
+        results.push({ label: name, ok: false, message: err.message });
+      }
+    }
+    renderBulkResults('flowOutcomeBulkResults', results);
+    document.getElementById('flowOutcomeBulkInput').value = '';
+  });
+});
+
+// ---- export / import (plain JSON -- Genesys has no native export/import file format for flow
+// outcomes, unlike Data Actions, confirmed by research; nothing to match here) ----
+
+document.getElementById('flowOutcomesExportAllBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('flowOutcomesExportAllBtn');
+  await withBusy(btn, 'Exporting…', async () => {
+    try {
+      const all = [];
+      let pageNumber = 1;
+      let total = Infinity;
+      while (all.length < total) {
+        const data = await proxy('GET', '/api/v2/flows/outcomes', { query: { pageNumber, pageSize: 100 } });
+        total = data.total || 0;
+        all.push(...(data.entities || []));
+        if (!data.entities || !data.entities.length) break;
+        pageNumber += 1;
+      }
+      // division is included for reference only -- its id is org-specific and meaningless when
+      // imported into a different org, so import (below) never reads it back.
+      const exportable = all.map((o) => ({
+        name: o.name,
+        description: o.description || '',
+        division: o.division ? { id: o.division.id, name: o.division.name } : null,
+      }));
+      downloadJson('flow-outcomes.json', exportable);
+      showToast(`Exported ${exportable.length} flow outcome${exportable.length === 1 ? '' : 's'}.`);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+});
+
+document.getElementById('flowOutcomesImportBtn').addEventListener('click', () => {
+  document.getElementById('flowOutcomesImportFile').click();
+});
+
+document.getElementById('flowOutcomesImportFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    showToast('That file is not valid JSON.', true);
+    return;
+  }
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  if (!items.length) { showToast('Nothing to import.', true); return; }
+
+  const btn = document.getElementById('flowOutcomesImportBtn');
+  await withBusy(btn, 'Importing…', async () => {
+    const results = [];
+    for (const item of items) {
+      const label = (item && item.name) || '(unnamed)';
+      if (!item || !item.name) {
+        results.push({ ok: false, label, message: 'missing "name"' });
+        continue;
+      }
+      try {
+        // Division is deliberately not sent -- it's org-specific and this file may well be
+        // crossing orgs, same reasoning as Data Actions' integrationId. Imported outcomes land
+        // in the default division; reassign via Edit afterward if needed.
+        const body = { name: item.name };
+        if (item.description) body.description = item.description;
+        const created = await proxy('POST', '/api/v2/flows/outcomes', { body });
+        flowOutcomesResource.prepend(created);
+        results.push({ ok: true, label: item.name });
+      } catch (err) {
+        results.push({ ok: false, label, message: err.message });
+      }
+    }
+    renderBulkResults('flowOutcomesResults', results);
+    const okCount = results.filter((r) => r.ok).length;
+    showToast(`Imported ${okCount} of ${results.length} flow outcome(s).`, okCount < results.length);
+  });
 });
 
 // ---- Queues ----------------------------------------------------
@@ -6125,6 +6364,16 @@ async function loadAuditTab() {
 // history, newest first. Update this array when shipping something worth calling out.
 
 const RELEASE_NOTES = [
+  {
+    date: '2026-08-30',
+    title: 'New Flow Outcomes module',
+    items: [
+      'New Automation → Flow Outcomes tab: the named outcomes Architect flows report success/failure against, for self-service performance tracking.',
+      'Create one at a time or bulk-add several at once (Name | Description per line, description optional).',
+      'Export/import as JSON. Genesys has no native export/import file format for this resource (unlike Data Actions), so this is plain JSON rather than something matching a Genesys-native shape. Import never carries a division across — division IDs are org-specific and wouldn\'t resolve in a different org; reassign via Edit afterward if needed.',
+      "Outcomes can be created and renamed but not deleted — Genesys's API has no delete endpoint for this resource, so there's no Delete action here.",
+    ],
+  },
   {
     date: '2026-08-21',
     title: 'Disconnect Interaction: single-queue selection, disconnect by ID',
