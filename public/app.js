@@ -236,7 +236,11 @@ function finishGlobalProgress() {
 // (bulk-add, import, export-all, bulk-disconnect) call it with current/total for real progress;
 // everything else can just ignore the parameter and gets the simulated trickle for free.
 async function withBusy(button, busyLabel, fn) {
-  const originalLabel = button.textContent;
+  // innerHTML, not textContent: icon-only buttons hold an <svg>, and restoring textContent on
+  // those would leave the button permanently empty (textContent of an SVG-only button is '').
+  // For plain text buttons this round-trips identically, and it also correctly restores buttons
+  // whose label the callback rewrote mid-flight (e.g. the "Applying... (3/48)" counters).
+  const originalHtml = button.innerHTML;
   button.disabled = true;
   button.textContent = busyLabel;
   startGlobalProgress();
@@ -244,7 +248,7 @@ async function withBusy(button, busyLabel, fn) {
     return await fn(setGlobalProgress);
   } finally {
     button.disabled = false;
-    button.textContent = originalLabel;
+    button.innerHTML = originalHtml;
     finishGlobalProgress();
   }
 }
@@ -615,9 +619,19 @@ const tabMeta = {
   releasenotes: { title: 'Release Notes', sub: "What's shipped in this toolkit, newest first", create: null, bulk: false },
 };
 
+// Tabs whose loader pulls nothing from Genesys -- refreshing them would be a visible no-op, so
+// the header's Refresh button is hidden rather than lying about doing something.
+const NON_REFRESHABLE_TABS = new Set(['explorer', 'releasenotes']);
+let currentTab = null;
+
 function setActiveTab(tab) {
+  currentTab = tab;
   document.querySelectorAll('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('hidden', p.id !== `tab-${tab}`));
+
+  document
+    .getElementById('refreshTabBtn')
+    .classList.toggle('hidden', !tabLoaders[tab] || NON_REFRESHABLE_TABS.has(tab));
 
   const meta = tabMeta[tab];
   document.getElementById('mainTitle').textContent = meta.title;
@@ -641,6 +655,26 @@ function setActiveTab(tab) {
     Promise.resolve(tabLoaders[tab]()).catch((err) => showToast(err.message, true));
   }
 }
+
+// One Refresh button in the header serves every module: it just re-runs whichever tab is open
+// through its own loader, so each module refetches exactly what it fetches on first open -- no
+// per-module refresh plumbing, and nothing to keep in sync as modules are added. The per-panel
+// refresh buttons inside Queues, Disconnect Interaction and Data Actions stay as they are; those
+// reload one sub-list, which is a narrower thing than reloading the whole tab.
+document.getElementById('refreshTabBtn').addEventListener('click', async () => {
+  const tab = currentTab;
+  if (!tab || !tabLoaders[tab] || NON_REFRESHABLE_TABS.has(tab)) return;
+  const btn = document.getElementById('refreshTabBtn');
+  await withBusy(btn, '…', async () => {
+    try {
+      lazyLoaded.add(tab); // already loaded by definition -- re-running below IS the refresh
+      await tabLoaders[tab]();
+      showToast(`${tabMeta[tab].title} refreshed.`);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+});
 
 document.querySelectorAll('.nav-item').forEach((item) => {
   item.addEventListener('click', () => {
