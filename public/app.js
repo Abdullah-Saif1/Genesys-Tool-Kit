@@ -5861,7 +5861,16 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
         const created = await proxy('POST', '/api/v2/integrations/actions', {
           body: {
             name: item.name,
-            category: item.category || 'Custom',
+            // Genesys shows `category` as the Category column on its own Data Actions screen, and
+            // by its own convention that mirrors the owning integration's name -- which is why
+            // imports were landing as "Custom" instead of the integration picked above. Neither
+            // Genesys's export files nor this app's carry a category, so the old
+            // `item.category || 'Custom'` fallback fired every time. The target integration's
+            // name is used unconditionally rather than any category found in the file: the file
+            // may well come from another org where it named a different integration, and showing
+            // that stale label against the integration these actions now actually live under is
+            // exactly the confusion being fixed.
+            category: integrationNameFor(integrationId),
             secure: !!item.secure,
             integrationId,
             contract: { input: { inputSchema }, output: { successSchema } },
