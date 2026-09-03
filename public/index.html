@@ -618,7 +618,10 @@
           <!-- Data Actions -->
           <section id="tab-dataactions" class="tab-panel hidden">
             <div class="notice-box" style="margin-bottom:14px">
-              Bulk export and import Integrations &rarr; Data Actions as JSON. A data action belongs to a specific
+              Bulk export and import Integrations &rarr; Data Actions as JSON. <b>Import accepts many files at
+              once</b> &mdash; select every action file you want in the picker (Ctrl/Cmd-click or Ctrl+A), and each
+              one is created in turn, with a per-action result list at the bottom. Files exported from Genesys's own
+              Data Actions screen work as-is, as do files exported from here. A data action belongs to a specific
               integration in this org, so <b>export always includes the source integration's name for reference,
               and import always creates new actions attached to whichever integration you pick below</b> &mdash;
               it never tries to guess or overwrite an existing one. The integration must already exist here before
@@ -631,8 +634,8 @@
                 <select id="dataActionsIntegrationSelect" class="text-input"><option value="">Loading integrations&hellip;</option></select>
               </div>
               <div style="align-self:flex-end;display:flex;gap:8px;flex-wrap:wrap">
-                <input type="file" id="dataActionsImportFile" accept="application/json" class="hidden" />
-                <button id="dataActionsImportBtn" class="btn btn-subtle">&#8593; Import</button>
+                <input type="file" id="dataActionsImportFile" accept="application/json,.json" multiple class="hidden" />
+                <button id="dataActionsImportBtn" class="btn btn-subtle" title="Select one or many .json files to import">&#8593; Import</button>
                 <button id="dataActionsExportAllBtn" class="btn btn-subtle">&#8595; Export all</button>
                 <button id="dataActionsRefreshBtn" class="btn btn-subtle" title="Refresh">&#8635;</button>
               </div>

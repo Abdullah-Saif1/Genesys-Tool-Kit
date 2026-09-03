@@ -5792,31 +5792,54 @@ document.getElementById('dataActionsImportBtn').addEventListener('click', () => 
 });
 
 document.getElementById('dataActionsImportFile').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
+  const files = [...e.target.files];
   e.target.value = '';
-  if (!file) return;
+  if (!files.length) return;
 
   const integrationId = document.getElementById('dataActionsIntegrationSelect').value;
   if (!integrationId) { showToast('Choose a target integration first.', true); return; }
 
-  let parsed;
-  try {
-    parsed = JSON.parse(await file.text());
-  } catch {
-    showToast('That file is not valid JSON.', true);
+  // Read and parse every selected file up front, so one unreadable file is reported as its own
+  // failed row instead of aborting the whole batch. Each file holds either a single action (the
+  // shape Genesys's own export produces, one file per action) or an array of them.
+  const entries = []; // { item, source } -- source is the filename, for traceable error rows
+  const fileFailures = [];
+  for (const file of files) {
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch (err) {
+      fileFailures.push({ ok: false, label: file.name, message: `not valid JSON (${err.message})` });
+      continue;
+    }
+    const fromFile = Array.isArray(parsed) ? parsed : [parsed];
+    if (!fromFile.length) {
+      fileFailures.push({ ok: false, label: file.name, message: 'file contains no actions' });
+      continue;
+    }
+    fromFile.forEach((item) => entries.push({ item, source: file.name }));
+  }
+
+  if (!entries.length) {
+    renderBulkResults('dataActionsResults', fileFailures);
+    showToast(fileFailures.length ? 'Nothing could be read from the selected file(s).' : 'Nothing to import.', true);
     return;
   }
-  const items = Array.isArray(parsed) ? parsed : [parsed];
-  if (!items.length) { showToast('Nothing to import.', true); return; }
 
   const btn = document.getElementById('dataActionsImportBtn');
   await withBusy(btn, 'Importing…', async (setProgress) => {
-    const results = [];
-    for (const item of items) {
-      const label = (item && item.name) || '(unnamed)';
+    const results = [...fileFailures];
+    let done = 0;
+    const tick = () => { done += 1; setProgress(done / entries.length); };
+
+    for (const { item, source } of entries) {
+      btn.textContent = `Importing… (${done + 1}/${entries.length})`;
+      // Fall back to the filename when the action itself has no name, so a bad row is still
+      // traceable back to the file it came from.
+      const label = (item && item.name) || source;
       if (!item || !item.name || !item.contract || !item.config) {
-        results.push({ ok: false, label, message: 'missing "name", "contract", or "config"' });
-        setProgress(results.length / items.length);
+        results.push({ ok: false, label, message: `missing "name", "contract", or "config" (${source})` });
+        tick();
         continue;
       }
       // GET returns contract.input/output shaped as ActionInput/ActionOutput (inputSchemaUri,
@@ -5825,12 +5848,13 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
       // Sending the extra GET-only fields back is exactly the shape Genesys's own native Import
       // Action UI rejected live ("contract.input/output: must NOT have additional properties");
       // stripping down to what the create API actually documents avoids relying on it silently
-      // ignoring fields it doesn't expect.
+      // ignoring fields it doesn't expect. Genesys's own per-action export files already match
+      // this trimmed shape, so they import as-is.
       const inputSchema = item.contract.input && item.contract.input.inputSchema;
       const successSchema = item.contract.output && item.contract.output.successSchema;
       if (!inputSchema || !successSchema) {
-        results.push({ ok: false, label, message: 'contract is missing input.inputSchema or output.successSchema' });
-        setProgress(results.length / items.length);
+        results.push({ ok: false, label, message: `contract is missing input.inputSchema or output.successSchema (${source})` });
+        tick();
         continue;
       }
       try {
@@ -5847,13 +5871,18 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
         dataActionsResource.prepend(created);
         results.push({ ok: true, label: item.name });
       } catch (err) {
-        results.push({ ok: false, label, message: err.message });
+        results.push({ ok: false, label, message: `${err.message} (${source})` });
       }
-      setProgress(results.length / items.length);
+      tick();
     }
+
     renderBulkResults('dataActionsResults', results);
     const okCount = results.filter((r) => r.ok).length;
-    showToast(`Imported ${okCount} of ${results.length} data action(s) into "${integrationNameFor(integrationId)}".`, okCount < results.length);
+    const fileNote = files.length > 1 ? ` from ${files.length} files` : '';
+    showToast(
+      `Imported ${okCount} of ${results.length} data action(s)${fileNote} into "${integrationNameFor(integrationId)}".`,
+      okCount < results.length
+    );
   });
 });
 
