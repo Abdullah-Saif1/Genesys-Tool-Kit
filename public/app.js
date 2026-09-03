@@ -5752,6 +5752,67 @@ document.getElementById('dataActionsExportAllBtn').addEventListener('click', asy
   });
 });
 
+// Repairs the Category label on already-imported actions. Genesys shows `category` as the
+// Category column and by convention it mirrors the owning integration's name, but actions
+// imported before that was fixed landed as "Custom". This sets each selected action's category
+// to the integration THAT ACTION actually belongs to -- deliberately not the integration chosen
+// in the import picker above, since a selection can span several integrations.
+//
+// PATCH /integrations/actions/{id} takes UpdateActionInput, which requires `version`, so each
+// action is re-read immediately before its patch to pick up the current version rather than
+// trusting a possibly-stale one from the loaded list.
+document.getElementById('dataActionsFixCategoryBtn').addEventListener('click', async () => {
+  const ids = [...selectedDataActionIds];
+  if (!ids.length) return;
+
+  const ok = await confirmModal({
+    title: `Fix category on ${ids.length} data action${ids.length === 1 ? '' : 's'}`,
+    message: `Set the Category of ${ids.length} selected action(s) to the integration each one belongs to? This only relabels them -- their configuration, contracts and IDs are untouched, so anything referencing them keeps working.`,
+    confirmLabel: 'Fix category',
+    danger: false,
+  });
+  if (!ok) return;
+
+  const btn = document.getElementById('dataActionsFixCategoryBtn');
+  await withBusy(btn, 'Fixing…', async (setProgress) => {
+    const results = [];
+    for (const [index, id] of ids.entries()) {
+      btn.textContent = `Fixing… (${index + 1}/${ids.length})`;
+      const known = dataActionsResource.state.items.find((a) => a.id === id);
+      const label = (known && known.name) || id;
+      try {
+        const current = await proxy('GET', `/api/v2/integrations/actions/${id}`);
+        // Resolved from the cache directly rather than via integrationNameFor, which falls back
+        // to returning the raw id when it can't resolve one -- that would silently write an id
+        // into the Category column instead of reporting that it couldn't be resolved.
+        const integration = allIntegrationsCache.find((i) => i.id === current.integrationId);
+        const desired = integration && integration.name;
+        if (!desired) {
+          results.push({ ok: false, label, message: "its integration isn't in the loaded list -- refresh and retry" });
+        } else if (current.category === desired) {
+          results.push({ skipped: true, label, message: `already "${desired}"` });
+        } else {
+          await proxy('PATCH', `/api/v2/integrations/actions/${id}`, {
+            body: { version: current.version, category: desired },
+          });
+          if (known) known.category = desired;
+          results.push({ ok: true, label: `${label} → ${desired}` });
+        }
+      } catch (err) {
+        results.push({ ok: false, label, message: err.message });
+      }
+      setProgress((index + 1) / ids.length);
+    }
+    dataActionsResource.render();
+    renderBulkResults('dataActionsResults', results);
+    const okCount = results.filter((r) => r.ok).length;
+    const skipCount = results.filter((r) => r.skipped).length;
+    const failCount = results.length - okCount - skipCount;
+    const skipNote = skipCount ? ` (${skipCount} already correct)` : '';
+    showToast(`Category fixed on ${okCount} of ${results.length} action(s)${skipNote}.`, failCount > 0);
+  });
+});
+
 document.getElementById('dataActionsDeleteSelectedBtn').addEventListener('click', async () => {
   const ids = [...selectedDataActionIds];
   if (!ids.length) return;
