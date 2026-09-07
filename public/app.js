@@ -5662,15 +5662,12 @@ const dataActionsResource = createListResource({
       el('div', { class: 'row-actions' }, [exportBtn, del]),
     ]);
   },
-  // Category and Integration are shown as their own columns, so they're filterable the same way
-  // the name is. Both read straight off the controls, so the list re-filters on change without
-  // any state of its own to keep in sync.
+  // Category is filterable alongside the name. There's deliberately no separate Integration
+  // filter: an action's category mirrors its integration, so the two columns say the same thing
+  // and a second dropdown would just be a duplicate control.
   extraFilter: (action) => {
-    const wantIntegration = document.getElementById('dataActionsIntegrationFilter').value;
     const wantCategory = document.getElementById('dataActionsCategoryFilter').value;
-    if (wantIntegration && integrationNameFor(action.integrationId) !== wantIntegration) return false;
-    if (wantCategory && dataActionCategoryLabel(action) !== wantCategory) return false;
-    return true;
+    return !wantCategory || dataActionCategoryLabel(action) === wantCategory;
   },
   onRender: (filtered, state) => {
     dataActionsVisibleIds = filtered.map((a) => a.id);
@@ -5701,26 +5698,21 @@ function refreshDataActionsFilterOptions(items) {
     select.value = values.includes(previous) ? previous : '';
   };
   const sorted = (vals) => [...new Set(vals)].sort((a, b) => a.localeCompare(b));
-  fill('dataActionsIntegrationFilter', 'All integrations', sorted(items.map((a) => integrationNameFor(a.integrationId))));
   fill('dataActionsCategoryFilter', 'All categories', sorted(items.map(dataActionCategoryLabel)));
 }
 
 function updateDataActionsFilterCount(shown, total) {
   const nameFilter = document.getElementById('dataActionsFilter').value.trim();
-  const wantIntegration = document.getElementById('dataActionsIntegrationFilter').value;
   const wantCategory = document.getElementById('dataActionsCategoryFilter').value;
-  const filtering = !!(nameFilter || wantIntegration || wantCategory);
+  const filtering = !!(nameFilter || wantCategory);
   document.getElementById('dataActionsFilterCount').textContent = filtering ? `Showing ${shown} of ${total} loaded` : '';
   document.getElementById('dataActionsClearFiltersBtn').classList.toggle('hidden', !filtering);
 }
 
-['dataActionsIntegrationFilter', 'dataActionsCategoryFilter'].forEach((id) => {
-  document.getElementById(id).addEventListener('change', () => dataActionsResource.render());
-});
+document.getElementById('dataActionsCategoryFilter').addEventListener('change', () => dataActionsResource.render());
 
 document.getElementById('dataActionsClearFiltersBtn').addEventListener('click', () => {
   document.getElementById('dataActionsFilter').value = '';
-  document.getElementById('dataActionsIntegrationFilter').value = '';
   document.getElementById('dataActionsCategoryFilter').value = '';
   dataActionsResource.render();
 });
