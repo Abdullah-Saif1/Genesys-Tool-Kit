@@ -63,7 +63,10 @@
 
           <div id="savedConnectionsWrap" class="hidden">
             <div class="field-label">Saved connections</div>
-            <div id="savedConnectionsList" class="saved-conn-list"></div>
+            <div class="saved-conn-row">
+              <select id="savedConnectionsSelect" class="text-input" aria-label="Saved connections"></select>
+              <button type="button" id="forgetConnectionBtn" class="btn btn-outline" title="Forget the selected connection" disabled>Forget</button>
+            </div>
           </div>
 
           <div>

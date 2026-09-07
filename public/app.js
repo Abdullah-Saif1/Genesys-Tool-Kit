@@ -816,43 +816,47 @@ function rememberConnectionOrgName(region, clientId, orgName) {
 
 function renderSavedConnections() {
   const wrap = document.getElementById('savedConnectionsWrap');
-  const list = document.getElementById('savedConnectionsList');
+  const select = document.getElementById('savedConnectionsSelect');
+  const forgetBtn = document.getElementById('forgetConnectionBtn');
   const saved = loadSavedConnections().sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
+
   wrap.classList.toggle('hidden', saved.length === 0);
-  list.innerHTML = '';
-
+  const previous = select.value;
+  select.innerHTML = '';
+  select.appendChild(el('option', { value: '', text: `Pick a saved connection… (${saved.length})` }));
   saved.forEach((conn) => {
-    const remove = el('button', {
-      type: 'button',
-      class: 'conn-remove',
-      title: 'Forget this connection',
-      'aria-label': `Forget ${conn.orgName || conn.clientId}`,
-      text: '×',
-    });
-    remove.addEventListener('click', (e) => {
-      e.stopPropagation(); // the row itself is a button; don't also select what we're deleting
-      persistSavedConnections(loadSavedConnections().filter((c) => c.key !== conn.key));
-      renderSavedConnections();
-    });
-
-    const row = el('button', { type: 'button', class: 'saved-conn' }, [
-      el('div', { class: 'conn-main' }, [
-        el('div', { class: 'conn-org', text: conn.orgName || 'Organization not recorded yet' }),
-        el('div', { class: 'conn-meta', text: `${regionLabelFor(conn.region)} · ${maskClientId(conn.clientId)}` }),
-      ]),
-      remove,
-    ]);
-    row.addEventListener('click', () => {
-      document.getElementById('region').value = conn.region;
-      document.getElementById('clientId').value = conn.clientId;
-      const secret = document.getElementById('clientSecret');
-      secret.value = ''; // never stored, so it always has to be re-entered
-      secret.focus();
-      showError('loginError', '');
-    });
-    list.appendChild(row);
+    // Org name first since that's what identifies it at a glance; region and a shortened Client
+    // ID follow to keep two connections to the same org distinguishable.
+    const org = conn.orgName || 'Organization not recorded yet';
+    select.appendChild(el('option', { value: conn.key, text: `${org} — ${regionLabelFor(conn.region)} · ${maskClientId(conn.clientId)}` }));
   });
+  select.value = saved.some((c) => c.key === previous) ? previous : '';
+  forgetBtn.disabled = !select.value;
 }
+
+function applySavedConnection(key) {
+  const conn = loadSavedConnections().find((c) => c.key === key);
+  if (!conn) return;
+  document.getElementById('region').value = conn.region;
+  document.getElementById('clientId').value = conn.clientId;
+  const secret = document.getElementById('clientSecret');
+  secret.value = ''; // never stored, so it always has to be re-entered
+  secret.focus();
+  showError('loginError', '');
+}
+
+document.getElementById('savedConnectionsSelect').addEventListener('change', (e) => {
+  document.getElementById('forgetConnectionBtn').disabled = !e.target.value;
+  if (e.target.value) applySavedConnection(e.target.value);
+});
+
+document.getElementById('forgetConnectionBtn').addEventListener('click', () => {
+  const key = document.getElementById('savedConnectionsSelect').value;
+  if (!key) return;
+  persistSavedConnections(loadSavedConnections().filter((c) => c.key !== key));
+  document.getElementById('savedConnectionsSelect').value = '';
+  renderSavedConnections();
+});
 
 document.getElementById('secretToggle').addEventListener('click', () => {
   const input = document.getElementById('clientSecret');
