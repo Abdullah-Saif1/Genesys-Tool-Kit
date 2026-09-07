@@ -712,6 +712,9 @@ function setAuthenticated(isAuthenticated, region) {
           const text = `${org.name} · ${region}`;
           regionLabel.textContent = text;
           regionLabel.title = text;
+          if (activeConnection) {
+            rememberConnectionOrgName(activeConnection.region, activeConnection.clientId, org.name);
+          }
         }
       })
       .catch(() => {});
@@ -738,6 +741,116 @@ async function loadRegions() {
   const select = document.getElementById('region');
   regions.forEach(({ id, label, code }) => {
     select.appendChild(el('option', { value: id, text: code ? `${label} (${code})` : label }));
+  });
+  // Saved rows show the region's readable label, so they're rendered only once the options
+  // that provide it exist.
+  renderSavedConnections();
+}
+
+// ---- Saved connections -----------------------------------------------------
+// Deliberately stores NO secret: just region + Client ID + the org name resolved after a
+// successful connect, so picking one refills the form and you type only the secret. That keeps
+// the app's existing guarantee intact -- the shared app-access password on its own still can't
+// reach anyone's Genesys org, which would no longer be true if secrets were kept here or
+// server-side. Lives in this browser only (same as the SLA presets), so nothing is shared with
+// colleagues and nothing new is written to the server.
+const CONNECTIONS_KEY = 'gct.connections';
+let activeConnection = null; // { region, clientId } for the login this session came from
+
+function loadSavedConnections() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CONNECTIONS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return []; // unreadable or unavailable storage just means "no saved connections"
+  }
+}
+
+function persistSavedConnections(list) {
+  try {
+    localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(list));
+  } catch {
+    showToast('Could not save this connection — browser storage is unavailable or full.', true);
+  }
+}
+
+function connectionKey(region, clientId) {
+  return `${region}:${clientId}`;
+}
+
+// Region values are opaque ids; the label shown in the picker is the readable form, so saved
+// rows reuse it rather than showing the raw id.
+function regionLabelFor(regionId) {
+  const option = [...document.getElementById('region').options].find((o) => o.value === regionId);
+  return option ? option.textContent : regionId;
+}
+
+function maskClientId(clientId) {
+  return clientId.length > 14 ? `${clientId.slice(0, 8)}…${clientId.slice(-4)}` : clientId;
+}
+
+// Called after a connect succeeds. The org name isn't known yet at that point (it needs an
+// authenticated call), so it's filled in later by rememberConnectionOrgName.
+function rememberConnection(region, clientId) {
+  const list = loadSavedConnections();
+  const key = connectionKey(region, clientId);
+  const existing = list.find((c) => c.key === key);
+  if (existing) {
+    existing.lastUsed = Date.now();
+  } else {
+    list.push({ key, region, clientId, orgName: '', lastUsed: Date.now() });
+  }
+  persistSavedConnections(list);
+  renderSavedConnections();
+}
+
+function rememberConnectionOrgName(region, clientId, orgName) {
+  if (!region || !clientId || !orgName) return;
+  const list = loadSavedConnections();
+  const entry = list.find((c) => c.key === connectionKey(region, clientId));
+  if (!entry || entry.orgName === orgName) return;
+  entry.orgName = orgName;
+  persistSavedConnections(list);
+  renderSavedConnections();
+}
+
+function renderSavedConnections() {
+  const wrap = document.getElementById('savedConnectionsWrap');
+  const list = document.getElementById('savedConnectionsList');
+  const saved = loadSavedConnections().sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
+  wrap.classList.toggle('hidden', saved.length === 0);
+  list.innerHTML = '';
+
+  saved.forEach((conn) => {
+    const remove = el('button', {
+      type: 'button',
+      class: 'conn-remove',
+      title: 'Forget this connection',
+      'aria-label': `Forget ${conn.orgName || conn.clientId}`,
+      text: '×',
+    });
+    remove.addEventListener('click', (e) => {
+      e.stopPropagation(); // the row itself is a button; don't also select what we're deleting
+      persistSavedConnections(loadSavedConnections().filter((c) => c.key !== conn.key));
+      renderSavedConnections();
+    });
+
+    const row = el('button', { type: 'button', class: 'saved-conn' }, [
+      el('div', { class: 'conn-main' }, [
+        el('div', { class: 'conn-org', text: conn.orgName || 'Organization not recorded yet' }),
+        el('div', { class: 'conn-meta', text: `${regionLabelFor(conn.region)} · ${maskClientId(conn.clientId)}` }),
+      ]),
+      remove,
+    ]);
+    row.addEventListener('click', () => {
+      document.getElementById('region').value = conn.region;
+      document.getElementById('clientId').value = conn.clientId;
+      const secret = document.getElementById('clientSecret');
+      secret.value = ''; // never stored, so it always has to be re-entered
+      secret.focus();
+      showError('loginError', '');
+    });
+    list.appendChild(row);
   });
 }
 
@@ -801,6 +914,12 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     await new Promise((r) => setTimeout(r, 320));
     renderConnectSteps(4);
     await new Promise((r) => setTimeout(r, 200));
+
+    // Tracked so the org name, which only becomes available after authenticating, can be
+    // attached to the right saved row. Left null on a restored session (checkStatus), where
+    // there's no Client ID in hand to attribute it to.
+    activeConnection = { region, clientId };
+    if (document.getElementById('rememberConnection').checked) rememberConnection(region, clientId);
 
     setAuthenticated(true, data.region);
   } catch (err) {

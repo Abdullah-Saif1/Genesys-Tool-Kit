@@ -60,6 +60,12 @@
 
         <form id="loginForm" class="login-form">
           <h2>Connect your org</h2>
+
+          <div id="savedConnectionsWrap" class="hidden">
+            <div class="field-label">Saved connections</div>
+            <div id="savedConnectionsList" class="saved-conn-list"></div>
+          </div>
+
           <div>
             <div class="field-label">Region</div>
             <select id="region" class="text-input" required></select>
@@ -75,7 +81,11 @@
               <span id="secretToggle" class="secret-toggle">Show</span>
             </div>
           </div>
-          <div class="notice-box">Your secret is sent once to your local server to fetch a token &mdash; it is never stored in the browser.</div>
+          <label class="saved-conn-remember">
+            <input type="checkbox" id="rememberConnection" checked />
+            <span>Remember this connection &mdash; region and Client ID only, saved in this browser</span>
+          </label>
+          <div class="notice-box">Your secret is sent once to your local server to fetch a token &mdash; it is never stored, here or on the server.</div>
           <p id="loginError" class="field-error hidden"></p>
           <div style="margin-top:auto">
             <button type="submit" class="btn btn-accent btn-block">Connect</button>
