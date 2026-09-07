@@ -5662,10 +5662,67 @@ const dataActionsResource = createListResource({
       el('div', { class: 'row-actions' }, [exportBtn, del]),
     ]);
   },
-  onRender: (filtered) => {
+  // Category and Integration are shown as their own columns, so they're filterable the same way
+  // the name is. Both read straight off the controls, so the list re-filters on change without
+  // any state of its own to keep in sync.
+  extraFilter: (action) => {
+    const wantIntegration = document.getElementById('dataActionsIntegrationFilter').value;
+    const wantCategory = document.getElementById('dataActionsCategoryFilter').value;
+    if (wantIntegration && integrationNameFor(action.integrationId) !== wantIntegration) return false;
+    if (wantCategory && dataActionCategoryLabel(action) !== wantCategory) return false;
+    return true;
+  },
+  onRender: (filtered, state) => {
     dataActionsVisibleIds = filtered.map((a) => a.id);
     renderDataActionsBulkBar();
+    refreshDataActionsFilterOptions(state.items);
+    updateDataActionsFilterCount(filtered.length, state.items.length);
   },
+});
+
+// Matches what the Category column renders, so a filter option always corresponds to something
+// actually visible in that column.
+function dataActionCategoryLabel(action) {
+  return action.category || '—';
+}
+
+// Options are derived from whatever is currently loaded, so they stay accurate as more pages are
+// pulled in. Setting select.value here doesn't fire a change event, so this can safely run from
+// onRender without re-entering the render it was called from.
+function refreshDataActionsFilterOptions(items) {
+  const fill = (selectId, allLabel, values) => {
+    const select = document.getElementById(selectId);
+    const previous = select.value;
+    select.innerHTML = '';
+    select.appendChild(el('option', { value: '', text: allLabel }));
+    values.forEach((v) => select.appendChild(el('option', { value: v, text: v })));
+    // Drop a selection whose value no longer exists in the loaded set -- leaving it would filter
+    // everything out and read as an empty tab rather than as a stale filter.
+    select.value = values.includes(previous) ? previous : '';
+  };
+  const sorted = (vals) => [...new Set(vals)].sort((a, b) => a.localeCompare(b));
+  fill('dataActionsIntegrationFilter', 'All integrations', sorted(items.map((a) => integrationNameFor(a.integrationId))));
+  fill('dataActionsCategoryFilter', 'All categories', sorted(items.map(dataActionCategoryLabel)));
+}
+
+function updateDataActionsFilterCount(shown, total) {
+  const nameFilter = document.getElementById('dataActionsFilter').value.trim();
+  const wantIntegration = document.getElementById('dataActionsIntegrationFilter').value;
+  const wantCategory = document.getElementById('dataActionsCategoryFilter').value;
+  const filtering = !!(nameFilter || wantIntegration || wantCategory);
+  document.getElementById('dataActionsFilterCount').textContent = filtering ? `Showing ${shown} of ${total} loaded` : '';
+  document.getElementById('dataActionsClearFiltersBtn').classList.toggle('hidden', !filtering);
+}
+
+['dataActionsIntegrationFilter', 'dataActionsCategoryFilter'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', () => dataActionsResource.render());
+});
+
+document.getElementById('dataActionsClearFiltersBtn').addEventListener('click', () => {
+  document.getElementById('dataActionsFilter').value = '';
+  document.getElementById('dataActionsIntegrationFilter').value = '';
+  document.getElementById('dataActionsCategoryFilter').value = '';
+  dataActionsResource.render();
 });
 
 async function loadDataActionsTab() {
