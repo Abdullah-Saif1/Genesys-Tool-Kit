@@ -742,9 +742,16 @@ async function loadRegions() {
   regions.forEach(({ id, label, code }) => {
     select.appendChild(el('option', { value: id, text: code ? `${label} (${code})` : label }));
   });
-  // Saved rows show the region's readable label, so they're rendered only once the options
-  // that provide it exist.
-  renderSavedConnections();
+  // Saved tiles show the region's readable label, so they're rendered only once the options that
+  // provide it exist. The most recently used connection is pre-selected -- it is the one being
+  // reconnected to nearly every time -- but without stealing focus on load.
+  const mostRecent = sortedConnections()[0];
+  if (mostRecent) {
+    selectConnection(mostRecent.key, { focus: false });
+  } else {
+    renderSavedConnections();
+    applyConnectionMode();
+  }
 }
 
 // ---- Saved connections -----------------------------------------------------
@@ -756,6 +763,7 @@ async function loadRegions() {
 // colleagues and nothing new is written to the server.
 const CONNECTIONS_KEY = 'gct.connections';
 let activeConnection = null; // { region, clientId } for the login this session came from
+let selectedConnectionKey = null; // the tile in use; null means the "New connection" form
 
 function loadSavedConnections() {
   try {
@@ -801,7 +809,9 @@ function rememberConnection(region, clientId) {
     list.push({ key, region, clientId, orgName: '', lastUsed: Date.now() });
   }
   persistSavedConnections(list);
+  selectedConnectionKey = key;
   renderSavedConnections();
+  applyConnectionMode();
 }
 
 function rememberConnectionOrgName(region, clientId, orgName) {
@@ -814,48 +824,165 @@ function rememberConnectionOrgName(region, clientId, orgName) {
   renderSavedConnections();
 }
 
+const ICON_CHECK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const ICON_FORGET = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
+const ICON_NEW_CONN = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+
+// el() goes through createElement, which cannot make SVG nodes, so the icons are set as markup.
+function iconEl(tag, className, markup, props = {}) {
+  const node = el(tag, Object.assign({ class: className }, props));
+  node.innerHTML = markup;
+  return node;
+}
+
+function sortedConnections() {
+  return loadSavedConnections().sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
+}
+
+// Two letters is all a 30px square holds. Org name first; before the first connect there is no
+// org name yet, so the Client ID stands in -- the same thing the tile then shows as its title.
+function connectionInitials(conn) {
+  const words = (conn.orgName || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length) return (words[0][0] + (words[1] ? words[1][0] : '')).toUpperCase();
+  return conn.clientId.slice(0, 2).toUpperCase();
+}
+
+function connectionTile(conn, selected) {
+  const named = !!conn.orgName;
+  const tile = el('div', {
+    class: `conn-tile${selected ? ' selected' : ''}`,
+    role: 'button',
+    tabindex: '0',
+    title: `${conn.orgName || 'Organization not recorded yet'} — ${regionLabelFor(conn.region)} · ${conn.clientId}`,
+  });
+
+  const forget = iconEl('button', 'conn-forget', ICON_FORGET, {
+    type: 'button',
+    title: 'Forget this connection',
+    'aria-label': `Forget ${conn.orgName || conn.clientId}`,
+  });
+  forget.addEventListener('click', (e) => {
+    e.stopPropagation(); // the tile behind it selects on click
+    forgetConnection(conn.key);
+  });
+
+  const actions = el('div', { class: 'conn-tile-actions' }, selected ? [forget, iconEl('span', 'conn-mark', ICON_CHECK)] : [forget]);
+  tile.appendChild(el('div', { class: 'conn-tile-top' }, [el('div', { class: 'conn-avatar', text: connectionInitials(conn) }), actions]));
+  tile.appendChild(
+    el('div', {}, [
+      el('div', { class: 'conn-name', text: named ? conn.orgName : maskClientId(conn.clientId) }),
+      el('div', {
+        class: 'conn-meta',
+        text: named ? `${regionLabelFor(conn.region)} · ${maskClientId(conn.clientId)}` : regionLabelFor(conn.region),
+      }),
+    ])
+  );
+
+  tile.addEventListener('click', () => selectConnection(conn.key));
+  tile.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    selectConnection(conn.key);
+  });
+  return tile;
+}
+
+function newConnectionTile() {
+  const tile = el('div', { class: 'conn-tile conn-tile-new', role: 'button', tabindex: '0', title: 'Connect with a different OAuth client' });
+  tile.appendChild(iconEl('span', '', ICON_NEW_CONN));
+  tile.appendChild(el('span', { text: 'New connection' }));
+  tile.addEventListener('click', showNewConnection);
+  tile.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    showNewConnection();
+  });
+  return tile;
+}
+
 function renderSavedConnections() {
   const wrap = document.getElementById('savedConnectionsWrap');
-  const select = document.getElementById('savedConnectionsSelect');
-  const forgetBtn = document.getElementById('forgetConnectionBtn');
-  const saved = loadSavedConnections().sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
+  const grid = document.getElementById('savedConnectionsGrid');
+  const backBtn = document.getElementById('backToSavedBtn');
+  const saved = sortedConnections();
 
-  wrap.classList.toggle('hidden', saved.length === 0);
-  const previous = select.value;
-  select.innerHTML = '';
-  select.appendChild(el('option', { value: '', text: `Pick a saved connection… (${saved.length})` }));
-  saved.forEach((conn) => {
-    // Org name first since that's what identifies it at a glance; region and a shortened Client
-    // ID follow to keep two connections to the same org distinguishable.
-    const org = conn.orgName || 'Organization not recorded yet';
-    select.appendChild(el('option', { value: conn.key, text: `${org} — ${regionLabelFor(conn.region)} · ${maskClientId(conn.clientId)}` }));
-  });
-  select.value = saved.some((c) => c.key === previous) ? previous : '';
-  forgetBtn.disabled = !select.value;
+  if (selectedConnectionKey && !saved.some((c) => c.key === selectedConnectionKey)) selectedConnectionKey = null;
+
+  grid.innerHTML = '';
+  saved.forEach((conn) => grid.appendChild(connectionTile(conn, conn.key === selectedConnectionKey)));
+  grid.appendChild(newConnectionTile());
+
+  // Three states, and only one of them ever needs the full field set -- which is what keeps the
+  // card at its fixed height: nothing saved (plain form, as before), a tile picked (tiles only,
+  // since region and Client ID come from the tile), or "New connection" picked (full form, with
+  // the tiles swapped for a link back).
+  const usingSaved = saved.length > 0 && !!selectedConnectionKey;
+  wrap.classList.toggle('hidden', !usingSaved);
+  backBtn.classList.toggle('hidden', saved.length === 0 || usingSaved);
+}
+
+// Shows or hides the fields a saved connection makes redundant, and matches the security notice
+// to what is actually happening.
+function applyConnectionMode() {
+  const usingSaved = !!selectedConnectionKey;
+  document.getElementById('regionField').classList.toggle('hidden', usingSaved);
+  document.getElementById('clientIdField').classList.toggle('hidden', usingSaved);
+  document.getElementById('rememberField').classList.toggle('hidden', usingSaved);
+  // A hidden `required` control blocks submission with an unfocusable-control error whenever it
+  // is empty, so required follows visibility. The submit handler checks both values regardless.
+  document.getElementById('region').required = !usingSaved;
+  document.getElementById('clientId').required = !usingSaved;
+  // Already saved, so connecting from a tile should refresh its last-used stamp even if the box
+  // happened to be unticked earlier in this visit.
+  if (usingSaved) document.getElementById('rememberConnection').checked = true;
+  document.getElementById('loginNotice').textContent = usingSaved
+    ? 'Secrets are never saved — only the region and Client ID are kept, in this browser.'
+    : 'Your secret is sent once to your local server to fetch a token — it is never stored, here or on the server.';
 }
 
 function applySavedConnection(key) {
   const conn = loadSavedConnections().find((c) => c.key === key);
-  if (!conn) return;
+  if (!conn) return false;
   document.getElementById('region').value = conn.region;
   document.getElementById('clientId').value = conn.clientId;
-  const secret = document.getElementById('clientSecret');
-  secret.value = ''; // never stored, so it always has to be re-entered
-  secret.focus();
+  document.getElementById('clientSecret').value = ''; // never stored, so it is always re-entered
   showError('loginError', '');
+  return true;
 }
 
-document.getElementById('savedConnectionsSelect').addEventListener('change', (e) => {
-  document.getElementById('forgetConnectionBtn').disabled = !e.target.value;
-  if (e.target.value) applySavedConnection(e.target.value);
-});
-
-document.getElementById('forgetConnectionBtn').addEventListener('click', () => {
-  const key = document.getElementById('savedConnectionsSelect').value;
-  if (!key) return;
-  persistSavedConnections(loadSavedConnections().filter((c) => c.key !== key));
-  document.getElementById('savedConnectionsSelect').value = '';
+function selectConnection(key, { focus = true } = {}) {
+  if (!applySavedConnection(key)) return;
+  selectedConnectionKey = key;
   renderSavedConnections();
+  applyConnectionMode();
+  if (focus) document.getElementById('clientSecret').focus();
+}
+
+function showNewConnection() {
+  selectedConnectionKey = null;
+  document.getElementById('clientId').value = '';
+  document.getElementById('clientSecret').value = '';
+  showError('loginError', '');
+  renderSavedConnections();
+  applyConnectionMode();
+  document.getElementById('clientId').focus();
+}
+
+function forgetConnection(key) {
+  persistSavedConnections(loadSavedConnections().filter((c) => c.key !== key));
+  if (selectedConnectionKey !== key) {
+    renderSavedConnections();
+    return;
+  }
+  // The tile in use is gone, so fall back to the next most recent one, or to the blank form.
+  const next = sortedConnections()[0];
+  if (next) selectConnection(next.key, { focus: false });
+  else showNewConnection();
+}
+
+document.getElementById('backToSavedBtn').addEventListener('click', () => {
+  const next = sortedConnections()[0];
+  if (next) selectConnection(next.key);
 });
 
 document.getElementById('secretToggle').addEventListener('click', () => {
@@ -6825,6 +6952,16 @@ async function loadAuditTab() {
 // history, newest first. Update this array when shipping something worth calling out.
 
 const RELEASE_NOTES = [
+  {
+    date: '2026-09-08',
+    title: 'Saved connections on the login screen',
+    items: [
+      'The login screen now remembers the orgs you connect to and shows them as a grid of tiles, labelled with the organization name once it is known, plus its region and a shortened Client ID.',
+      'Picking a tile fills in the region and Client ID and hides both fields, so all that is left to type is the secret. "New connection" swaps the tiles for the full form when you need a different OAuth client.',
+      'Nothing secret is stored: only the region, the Client ID and the org name, and only in this browser. The secret is never written to storage here or on the server, so it is retyped on every connect.',
+      'Fixes the Connect button being pushed out of view once more than one connection was saved -- the tiles are capped in height and the form now gets shorter as connections accumulate, not taller.',
+    ],
+  },
   {
     date: '2026-08-30',
     title: 'Fixed: bulk queue updates (SLA, Scripts) were silently failing',
