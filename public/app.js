@@ -6159,6 +6159,13 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
   const integrationId = document.getElementById('dataActionsIntegrationSelect').value;
   if (!integrationId) { showToast('Choose a target integration first.', true); return; }
 
+  // Genesys has two create endpoints taking the same PostActionInput: /integrations/actions makes
+  // a live, published action, /integrations/actions/drafts makes a draft. Drafts are a SEPARATE
+  // collection -- GET /integrations/actions has no flag to include them -- so a draft import will
+  // not show up in the table below, which is why that is called out in the toast.
+  const asDraft = document.getElementById('dataActionsImportState').value === 'draft';
+  const createPath = asDraft ? '/api/v2/integrations/actions/drafts' : '/api/v2/integrations/actions';
+
   // Read and parse every selected file up front, so one unreadable file is reported as its own
   // failed row instead of aborting the whole batch. Each file holds either a single action (the
   // shape Genesys's own export produces, one file per action) or an array of them.
@@ -6218,7 +6225,7 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
         continue;
       }
       try {
-        const created = await proxy('POST', '/api/v2/integrations/actions', {
+        const created = await proxy('POST', createPath, {
           body: {
             name: item.name,
             // Genesys shows `category` as the Category column on its own Data Actions screen, and
@@ -6237,8 +6244,10 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
             config: item.config,
           },
         });
-        dataActionsResource.prepend(created);
-        results.push({ ok: true, label: item.name });
+        // Only published actions belong in this list; prepending a draft would show a row that
+        // vanishes on the next refresh, since the list reads the published collection.
+        if (!asDraft) dataActionsResource.prepend(created);
+        results.push({ ok: true, label: asDraft ? `${item.name} — draft` : item.name });
       } catch (err) {
         results.push({ ok: false, label, message: `${err.message} (${source})` });
       }
@@ -6248,8 +6257,9 @@ document.getElementById('dataActionsImportFile').addEventListener('change', asyn
     renderBulkResults('dataActionsResults', results);
     const okCount = results.filter((r) => r.ok).length;
     const fileNote = files.length > 1 ? ` from ${files.length} files` : '';
+    const stateNote = asDraft ? ' as drafts — publish them in Genesys to see them listed here' : '';
     showToast(
-      `Imported ${okCount} of ${results.length} data action(s)${fileNote} into "${integrationNameFor(integrationId)}".`,
+      `Imported ${okCount} of ${results.length} data action(s)${fileNote} into "${integrationNameFor(integrationId)}"${stateNote}.`,
       okCount < results.length
     );
   });
@@ -6952,6 +6962,16 @@ async function loadAuditTab() {
 // history, newest first. Update this array when shipping something worth calling out.
 
 const RELEASE_NOTES = [
+  {
+    date: '2026-09-09',
+    title: 'Data Actions: import as Published or Not published',
+    items: [
+      'New "Import as" picker beside "Import into integration": Published creates each action live and ready to use in flows, Not published creates it as a draft instead.',
+      'Genesys has two create endpoints taking the same input -- POST /integrations/actions for a live action and POST /integrations/actions/drafts for a draft -- so this picks the endpoint rather than creating and then unpublishing.',
+      'Drafts are a separate collection in Genesys and the list on this screen reads the published one, so actions imported as drafts do not appear in the table below. Publish them from Genesys\'s own Data Actions screen and they show up here. Imported drafts are marked as such in the per-action result list.',
+      'Published stays the default, so existing import behaviour is unchanged unless you switch it.',
+    ],
+  },
   {
     date: '2026-09-08',
     title: 'Saved connections on the login screen',
