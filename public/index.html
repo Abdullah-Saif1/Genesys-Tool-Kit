@@ -640,13 +640,23 @@
               and import always creates new actions attached to whichever integration you pick below</b> &mdash;
               it never tries to guess or overwrite an existing one. The integration must already exist here before
               you import. Imported actions take their <b>Category</b> from that same integration, matching how
-              Genesys labels actions created through its own screen.
+              Genesys labels actions created through its own screen. <b>Import as</b> decides whether each action
+              lands live or as a draft: <b>Published</b> creates it ready to use in flows straight away, while
+              <b>Not published</b> creates it as a draft &mdash; drafts are a separate collection in Genesys, so
+              they will not appear in the table below until you publish them from Genesys's own Data Actions screen.
             </div>
 
             <div class="toolbar-row" style="margin-bottom:12px">
               <div style="flex:1;min-width:220px">
                 <div class="field-label">Import into integration</div>
                 <select id="dataActionsIntegrationSelect" class="text-input"><option value="">Loading integrations&hellip;</option></select>
+              </div>
+              <div style="flex:none;min-width:200px">
+                <div class="field-label">Import as</div>
+                <select id="dataActionsImportState" class="text-input" title="Whether imported actions are created live or left as drafts">
+                  <option value="published">Published</option>
+                  <option value="draft">Not published (draft)</option>
+                </select>
               </div>
               <div style="align-self:flex-end;display:flex;gap:8px;flex-wrap:wrap">
                 <input type="file" id="dataActionsImportFile" accept="application/json,.json" multiple class="hidden" />
